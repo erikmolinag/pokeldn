@@ -13,6 +13,8 @@ from pokeldn.frlg.gift.gift_composer import (
     Exit,
     GiftSpec,
     SHARE_ALWAYS,
+    GiveCoins,
+    MAX_COINS,
     GiveEgg,
     GiveItem,
     GivePokemon,
@@ -1590,6 +1592,41 @@ MASTER_BALL_GIFT = WonderGift(
         ),
     )),
     completed_message="You already collected the MASTER BALL.",
+)
+
+
+GIFT_CASINO_COINS = "casino-coins"
+# Shared with mystery-event-probe, a probe of the console rather than a gift a player keeps: one bound
+# card at a time either way, and this one is repeatable, so its receipt flag never gates anything.
+CASINO_COINS_FLAG_ID = 1009
+CASINO_COINS_AMOUNT = MAX_COINS
+
+# Game Corner coins from the delivery man, through the field script's own `addcoins`: no address, so
+# the same card serves every language. Repeatable: talk to him again after spending them.
+CASINO_COINS_GIFT = WonderGift(
+    slug=GIFT_CASINO_COINS,
+    card=WonderCardSpec(
+        icon_species=SPECIES_CLEFAIRY_MEVENT,
+        title="MYSTERY GIFT",
+        subtitle="COINS for the GAME CORNER",
+        body=(
+            "A COIN delivery is waiting for",
+            "you. Talk to the delivery man on",
+            "the 2nd floor of a POKEMON",
+            "CENTER, as often as you like.",
+        ),
+        footer1="pokeldn",
+        default_flag_id=CASINO_COINS_FLAG_ID,
+    ),
+    intro_message="A COIN delivery has arrived!",
+    event=GiftSpec(repeatable=True),
+    delivery=DeliveryPlan(delivery=(
+        DeliveryStage(
+            Message(f"Here are {CASINO_COINS_AMOUNT} COINS for the\nGAME CORNER!"),
+            GiveCoins(CASINO_COINS_AMOUNT),
+        ),
+    )),
+    completed_message="Come back when you need more COINS.",
 )
 
 

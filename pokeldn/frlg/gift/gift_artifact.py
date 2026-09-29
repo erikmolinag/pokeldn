@@ -6,7 +6,7 @@ from pathlib import Path
 from pokeldn.frlg.gift import ereader_trainer
 from pokeldn.frlg.text import charmap
 from pokeldn.frlg.gift.gift_composer import (
-    BattleLegendary, BattlePokemon, GiftSpec, GiveEgg, GiveItem, GivePokemon,
+    BattleLegendary, BattlePokemon, GiftSpec, GiveCoins, GiveEgg, GiveItem, GivePokemon,
     AddVar, Message, ReadSpecial, RequireSpecialResult, SetVar, ShowSprite,
     StampRallySpec,
     SPECIAL_START_LEGENDARY_BATTLE,
@@ -67,6 +67,8 @@ def _action_summary(action):
         return f'Message({action.text!r})'
     if isinstance(action, GiveItem):
         return f"GiveItem(item={action.item}, quantity={action.quantity})"
+    if isinstance(action, GiveCoins):
+        return f"GiveCoins(amount={action.amount})"
     if isinstance(action, GivePokemon):
         return f"GivePokemon(species={action.species}, level={action.level})"
     if isinstance(action, GiveEgg):

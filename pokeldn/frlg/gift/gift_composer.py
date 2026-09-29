@@ -20,7 +20,7 @@ from pokeldn.frlg.gift.mystery_gift import (
 from pokeldn.frlg.gift.stamp_rally import MysteryGiftDistribution
 from pokeldn.frlg.gift.wonder_card import build_wonder_card, flag_for_flag_id
 from pokeldn.frlg.rom.scrcmd import (
-    COMPARE_EQ as _COMPARE_EQ, OP_ADDVAR as _OP_ADDVAR,
+    COMPARE_EQ as _COMPARE_EQ, OP_ADDCOINS as _OP_ADDCOINS, OP_ADDVAR as _OP_ADDVAR,
     OP_BUFFERNUMBERSTRING as _OP_BUFFERNUMBERSTRING, OP_CALLSTD as _OP_CALLSTD,
     OP_CHECKFLAG as _OP_CHECKFLAG, OP_CHECKITEMSPACE as _OP_CHECKITEMSPACE,
     OP_CLEARFLAG as _OP_CLEARFLAG, OP_CLOSEMESSAGE as _OP_CLOSEMESSAGE,
@@ -107,6 +107,10 @@ _DEFAULT_NO_ROOM_MESSAGE = "No room! Make space, then\ncome back."
 DEFAULT_BAG_FULL_MESSAGE = _DEFAULT_NO_ROOM_MESSAGE
 DEFAULT_STORAGE_FULL_MESSAGE = _DEFAULT_NO_ROOM_MESSAGE
 DEFAULT_PARTY_FULL_MESSAGE = _DEFAULT_NO_ROOM_MESSAGE
+# AddCoins refuses only when the player already holds MAX_COINS; below that it tops up to it
+# [decomp:src/coins.c:21, include/constants/coins.h].
+MAX_COINS = 9999
+DEFAULT_COINS_FULL_MESSAGE = "Your COINS are maxed out!\nSpend some, then come back."
 DEFAULT_COMPLETED_MESSAGE = (
     "You already received this MYSTERY GIFT.\nPlease look forward to future gifts!")
 
@@ -149,6 +153,14 @@ class Message:
 class GiveItem:
     item: int
     quantity: int = 1
+    failure_message: str | None = None
+
+
+@dataclass(frozen=True)
+class GiveCoins:
+    """Game Corner coins through the field script's own `addcoins`, capped at MAX_COINS. The
+    COIN CASE is not checked: the coins count whether or not the player can spend them yet."""
+    amount: int
     failure_message: str | None = None
 
 
@@ -281,10 +293,10 @@ class AnyOf:
 
 Condition: TypeAlias = VarEquals | FlagSet | Not | AllOf | AnyOf
 GiftAction: TypeAlias = (
-    Message | GiveItem | GivePokemon | GiveEgg | ShowSprite
+    Message | GiveItem | GiveCoins | GivePokemon | GiveEgg | ShowSprite
     | BattlePokemon | BattleLegendary | RequireSpecialResult | SetVar | AddVar
     | ReadSpecial | Exit)
-_FALLIBLE_REWARD_TYPES = (GiveItem, GivePokemon, GiveEgg)
+_FALLIBLE_REWARD_TYPES = (GiveItem, GiveCoins, GivePokemon, GiveEgg)
 _BATTLE_TYPES = (BattlePokemon, BattleLegendary)
 
 
@@ -452,6 +464,10 @@ def _validate_action(action, path):
     elif isinstance(action, GiveItem):
         _validate_int(action.item, 1, MAX_ITEM, f"{path}.item", "item")
         _validate_int(action.quantity, 1, 0xFFFF, f"{path}.quantity", "quantity")
+        if action.failure_message is not None:
+            _validate_message(action.failure_message, f"{path}.failure_message")
+    elif isinstance(action, GiveCoins):
+        _validate_int(action.amount, 1, MAX_COINS, f"{path}.amount", "coins")
         if action.failure_message is not None:
             _validate_message(action.failure_message, f"{path}.failure_message")
     elif isinstance(action, GivePokemon):
@@ -916,6 +932,13 @@ def _emit_action(builder, action, *, sprite_id, failure_label, completed_label):
         builder.emit(bytes([_OP_SETVAR_OR_COPY]) + _u16(_VAR_0x8000) + _u16(action.item))
         builder.emit(bytes([_OP_SETVAR_OR_COPY]) + _u16(_VAR_0x8001) + _u16(action.quantity))
         builder.emit(bytes([_OP_CALLSTD, _STD_OBTAIN_ITEM]))
+    elif isinstance(action, GiveCoins):
+        # ScrCmd_addcoins leaves VAR_RESULT FALSE on success and TRUE when AddCoins refused, which
+        # it does only at MAX_COINS [decomp:src/scrcmd.c:2204].
+        builder.emit(bytes([_OP_ADDCOINS]) + _u16(action.amount))
+        builder.emit(_compare(_VAR_RESULT, 1))
+        builder.vgoto_if(_COMPARE_EQ, failure_label)
+        builder.emit(bytes([_OP_PLAYFANFARE]) + _u16(MUS_OBTAIN_ITEM))
     elif isinstance(action, GivePokemon):
         if action.moves or action.fateful_encounter:
             builder.emit(bytes([_OP_GETPARTYSIZE]))
@@ -993,6 +1016,8 @@ def _emit_action(builder, action, *, sprite_id, failure_label, completed_label):
 def _failure_message(action):
     if isinstance(action, GiveItem):
         return action.failure_message or DEFAULT_BAG_FULL_MESSAGE
+    if isinstance(action, GiveCoins):
+        return action.failure_message or DEFAULT_COINS_FULL_MESSAGE
     if isinstance(action, (GivePokemon, GiveEgg)):
         if action.failure_message:
             return action.failure_message
@@ -1433,7 +1458,7 @@ def compile_definition(definition, *, flag_id=None, build=None):
 __all__ = [
     "AllOf", "AnyOf", "BattleLegendary", "BattlePokemon", "DeliveryPlan",
     "DeliveryStage",
-    "Exit", "FlagSet", "GiftSpec", "GiftValidationError", "GiveEgg", "GiveItem",
+    "Exit", "FlagSet", "GiftSpec", "GiftValidationError", "GiveCoins", "GiveEgg", "GiveItem",
     "GivePokemon", "MapPosition", "Message", "ReadSpecial", "RelativeToPlayer",
     "SetVar", "AddVar",
     "ShowSprite",

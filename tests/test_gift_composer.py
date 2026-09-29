@@ -20,8 +20,9 @@ class ScriptVM:
     BASE = 0x08000000
 
     def __init__(self, script, *, variables=None, flags=None, bag_space=True,
-                 mon_results=(), party_size=1, special_results=None):
+                 mon_results=(), party_size=1, special_results=None, coins=0):
         self.script = script
+        self.coins = coins
         self.pc = 0
         self.vars = dict(variables or {})
         self.flags = set(flags or ())
@@ -170,6 +171,13 @@ class ScriptVM:
                 self.sprites.append((graphics, sprite, self.var(x) if x >= 0x4000 else x,
                                      self.var(y) if y >= 0x4000 else y,
                                      elevation, direction))
+            elif op == 0xB4:  # addcoins: AddCoins refuses at the cap, else tops up to it
+                amount = self.var_get(self.u16())
+                if self.coins >= gc.MAX_COINS:
+                    self.vars[0x800D] = 1
+                else:
+                    self.coins = min(self.coins + amount, gc.MAX_COINS)
+                    self.vars[0x800D] = 0
             elif op == 0xB6:  # setwildbattle
                 species = self.u16()
                 level = self.script[self.pc]
