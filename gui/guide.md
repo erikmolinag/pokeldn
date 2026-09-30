@@ -5,15 +5,17 @@ the radio. Nothing is installed on the console.
 
 ## What you need
 
-- A classic ESP32 board (ESP32-D0WD, WROOM-32E) with a CP2102 or CH340 USB chip. It is 2.4 GHz only.
+- A classic ESP32 board (ESP32-D0WD, WROOM-32E) with a USB serial bridge, or an ESP32-S3 or
+  ESP32-C3 connected through its native USB port. All use 2.4 GHz. C6 and S2 boards are unsupported.
+  Attach the supplied antenna on a Seeed Studio XIAO ESP32C3.
 - A USB data cable. Charge-only cables show no port.
 - `prod.keys` dumped from your own Switch. The app asks for it once.
 - One of the seven games on the Games page.
 
 ## First run
 
-1. Board: plug the board in, select it, press Flash. Identify blinks its blue LED, so two boards can be
-   told apart.
+1. Board: plug the board in, select it, press Flash. The app detects the chip and selects its
+   firmware. Identify reads the MAC; classic ESP32 boards with a GPIO2 LED also blink.
 2. Games: pick a game and a tool.
 3. Pokemon to offer: search a species and press Build. PKHeX makes a legal one for that game, owned by
    the trainer in Settings.

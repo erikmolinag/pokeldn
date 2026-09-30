@@ -3,15 +3,42 @@ title: Desktop builds
 ---
 # Desktop builds
 
-Released apps include PKHeX and the merged ESP32 radio firmware. Users provide their own `prod.keys`.
+Released apps include PKHeX and merged radio firmware for ESP32, ESP32-S3 and ESP32-C3.
+Users provide their own `prod.keys`.
 
-The interface bundles the free MIT SVG set from Pixelarticons 2.4.1 in `gui/assets/icons/`, with its
-license. `gui/icons.py` renders the unchanged paths at the shared UI icon sizes and applies the
-interface colors through Flet's image tint.
+Open the app and choose `prod.keys` in Settings. On the Board page, select the USB board to use
+as the radio and flash its firmware. Choose a game and a tool, prepare a Pokemon or select a file,
+then follow the console instructions and press Start. Received Pokemon are saved to the folder
+chosen in Settings; the folder button beside Output opens it. Flash detects the chip and selects
+its bundled image; a custom image is checked against that chip before writing. Connect an S3
+or C3 through native USB Serial/JTAG. C6 and S2 chips are refused.
 
-Shared control sizing and button styles live in `gui/theme.py`. Compact icons use the default size
-in `gui/icons.py`; the navigation rail uses a larger size. `CodeBlock` in `gui/views/widgets.py`
-provides the code display and copy action for board setup, session commands and fenced Docs examples.
+## Pokemon sprites
+
+The Pokemon picker shows the species' pixel-art sprite, and the shiny sprite when Shiny is on. The
+sprites are the 96x96 PNGs behind `sprites.front_default` and `sprites.front_shiny` of
+`https://pokeapi.co/api/v2/pokemon/{id}`, read from `raw.githubusercontent.com/PokeAPI/sprites`
+(`sprites/pokemon/{id}.png`, `sprites/pokemon/shiny/{id}.png`). The JSON is not fetched: it is 300 KB
+per species, and the sprite path is fixed by the id. They are drawn at 96 px with nearest-neighbour
+filtering, never scaled to a non-integer size. Twelve National Dex numbers sampled from 1 to 1025 all have both sprites; 1026 returns 404.
+When a shiny sprite is missing, the picker shows the normal one.
+
+The cache is `sprites/` in the app's data folder, one file per sprite under `normal/` and `shiny/`.
+A sprite downloads on first use and is read from disk afterwards, with no network access. Rules:
+
+| situation | behaviour |
+|---|---|
+| no network, nothing cached | the pixelarticons `circle-question` icon; no error; the next attempt waits 60 s |
+| HTTP 404 | a `{id}.none` marker; not asked again for 7 days |
+| reply that is not a PNG, or over 200 KB | not cached |
+| damaged cached file | deleted, downloaded again |
+| data folder not writable | the sprite shows for the session and is not saved |
+| Settings, Pokemon sprites off | the cache is read, nothing is downloaded |
+
+Settings has the switch and a button that empties the cache. `POKELDN_SPRITE_BASE` replaces the sprite
+host, for tests (`tests/test_sprites.py`).
+
+## Run from source
 
 For source development, install Python 3.13 and the .NET 10 SDK:
 
@@ -23,24 +50,42 @@ dotnet build -c Release services/pkhex -warnaserror
 python gui/main.py
 ```
 
-Use the virtual environment's Python for these commands. The CLI shares the desktop tool presets:
+## Build a desktop app
 
-```sh
-python -m pokeldn --list
-python -m pokeldn --radio esp32:auto swsh-host --offer-file offer.pk8
-```
-
-Arguments after the tool name override scalar preset options. Direct `bin/` entry points remain
-available for protocol experiments. Offer files go through the same PKHeX validation.
-
-To package an app, install ESP-IDF v6.1 and activate its environment, then build the tracked firmware:
+To package an app, install ESP-IDF v6.1 for `esp32`, `esp32s3` and `esp32c3` and activate its environment.
+Build all three images with separate configurations:
 
 ```sh
 mkdir -p gui/firmware
-idf.py -C firmware/esp32 build
-idf.py -C firmware/esp32 merge-bin -o ../../../gui/firmware/pokeldn-radio.bin
+POKELDN_IMAGES="$PWD/gui/firmware"
+cd firmware/esp32
+idf.py -B build/esp32 -D SDKCONFIG="$PWD/build/esp32/sdkconfig" set-target esp32
+idf.py -B build/esp32 -D SDKCONFIG="$PWD/build/esp32/sdkconfig" build
+idf.py -B build/esp32 merge-bin -o "$POKELDN_IMAGES/pokeldn-radio.bin"
+idf.py -B build/esp32s3 -D SDKCONFIG="$PWD/build/esp32s3/sdkconfig" set-target esp32s3
+idf.py -B build/esp32s3 -D SDKCONFIG="$PWD/build/esp32s3/sdkconfig" build
+idf.py -B build/esp32s3 merge-bin -o "$POKELDN_IMAGES/pokeldn-radio-s3.bin"
+idf.py -B build/esp32c3 -D SDKCONFIG="$PWD/build/esp32c3/sdkconfig" set-target esp32c3
+idf.py -B build/esp32c3 -D SDKCONFIG="$PWD/build/esp32c3/sdkconfig" build
+idf.py -B build/esp32c3 merge-bin -o "$POKELDN_IMAGES/pokeldn-radio-c3.bin"
+cd ../..
 python scripts/pack_app.py
 ```
 
-The output path is relative to the firmware build directory.
-The release workflow performs this build and supplies the image to each desktop packer.
+The absolute output paths keep the images in `gui/firmware`. The packer requires all three images;
+the frozen app check verifies all are included. The release workflow builds each target separately
+and supplies all three images to every desktop packer.
+
+The app version is `pokeldn.__version__`. It appears in Settings and in the macOS and Windows
+package metadata. Update it and `.github/release-notes.md` together before preparing a release.
+The workflow produces `SHA256SUMS` for the three desktop downloads and three firmware images.
+Manual workflow runs produce artifacts; `v*` tags publish a release named `pokeldn vX.Y.Z` with
+`.github/release-notes.md` as its body, whose first line must be `# pokeldn X.Y.Z` (the workflow and
+`tests/test_release.py` check it), and with the same seven files every time.
+Only tags with a hyphen, such as `v0.3.0-rc1`, are marked as pre-releases; GitHub shows the
+newest other release as Latest in the repository sidebar.
+
+Flet 1.0.2's packer re-signs the macOS viewer without its existing entitlements. The packaging
+wrapper in `scripts/pack_flet.py` retains them when signing the viewer after its metadata changes.
+The frozen check reads the sealed `com.apple.security.files.user-selected.read-write` entitlement
+from the embedded viewer; without it, choosing `prod.keys` raises `ENTITLEMENT_NOT_FOUND`.
