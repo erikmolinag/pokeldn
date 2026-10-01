@@ -26,6 +26,7 @@ while (Console.ReadLine() is { } line)
         {
             "species" => Species(game),
             "names" => Names(game, (string)request["list"]!),
+            "options" => Options(game, request),
             "make" => Make(game, request),
             "check" => Check(game, Convert.FromBase64String((string)request["data"]!), request),
             "gift" => Gift(Convert.FromBase64String((string)request["data"]!)),
@@ -72,6 +73,12 @@ JsonObject Names(Game game, string list)
             for (var i = 1; i <= blank.MaxItemID; i++)
                 Add(i, strings.itemlist[i]);
             break;
+        case "held":
+            var items = strings.GetItemStrings(game.Context, game.Versions[0]);
+            for (var i = 1; i < items.Length; i++)
+                if (ItemRestrictions.IsHeldItemAllowed(i, game.Context))
+                    Add(i, items[i]);
+            break;
         case "balls":
             for (var b = 1; b <= blank.MaxBallID; b++)
                 Add(b, strings.balllist[b]);
@@ -80,6 +87,85 @@ JsonObject Names(Game game, string list)
             throw new ArgumentException($"unknown list {list}");
     }
     return new JsonObject { ["names"] = names };
+}
+
+// What the offer options can ask of this species in this game; the GUI shows only what is listed.
+JsonObject Options(Game game, JsonObject request)
+{
+    var species = checked((ushort)(int)request["species"]!);
+    if (!game.Table.IsPresentInGame(species, 0))
+        throw new ArgumentException("This species is absent from the selected game.");
+    var detail = game.Table[species];
+    var (versions, trainer) = Trainer(game, request);
+    // A ball is listed when PKHeX permits it for at least one encounter of the species.
+    var blank = game.Blank();
+    blank.Species = species;
+    var permitted = new HashSet<Ball>();
+    Span<Ball> found = stackalloc Ball[BallApplicator.MaxBallSpanAlloc];
+    foreach (var encounter in EncounterMovesetGenerator.GenerateEncounters(blank, trainer, ReadOnlyMemory<ushort>.Empty, versions).Take(80))
+    {
+        if (encounter is not IEncounterConvertible convertible)
+            continue;
+        var pk = convertible.ConvertToPKM(trainer);
+        foreach (var ball in found[..BallApplicator.GetLegalBalls(found, pk, encounter)])
+            permitted.Add(ball);
+    }
+    var balls = new JsonArray();
+    foreach (var ball in permitted.Order())
+        balls.Add(new JsonObject { ["id"] = (int)ball, ["name"] = strings.balllist[(int)ball] });
+    // An ability is listed when a legal Pokemon of the species can carry it (Let's Go has no hidden ability to give).
+    var abilities = new JsonArray();
+    // Legends Z-A has no abilities in battle.
+    if (game.Context != EntityContext.Gen9a)
+        foreach (var id in Enumerable.Range(0, detail.AbilityCount).Select(detail.GetAbilityAtIndex).Distinct())
+        {
+            var probe = request.DeepClone().AsObject();
+            probe["options"] = new JsonObject { ["ability"] = id };
+            try
+            {
+                Make(game, probe);
+            }
+            catch (InvalidOperationException)
+            {
+                continue;
+            }
+            abilities.Add(new JsonObject { ["id"] = id, ["name"] = strings.abilitylist[id] });
+        }
+    var natures = new JsonArray();
+    for (var n = 0; n < 25; n++)
+        natures.Add(new JsonObject { ["id"] = n, ["name"] = strings.natures[n] });
+    var effort = game.Blank() switch
+    {
+        IAwakened => new JsonObject { ["kind"] = "avs", ["max"] = AwakeningUtil.AwakeningMax },
+        IGanbaru => new JsonObject { ["kind"] = "gvs", ["max"] = GanbaruExtensions.TrueMax },
+        _ => new JsonObject { ["kind"] = "evs", ["max"] = EffortValues.Max252, ["total"] = EffortValues.Max510 },
+    };
+    return new JsonObject
+    {
+        ["natures"] = natures,
+        ["abilities"] = abilities,
+        ["gendered"] = !detail.Genderless && !detail.OnlyFemale && !detail.OnlyMale,
+        ["effort"] = effort,
+        ["held"] = Names(game, "held")["names"]!.DeepClone(),
+        ["balls"] = balls,
+    };
+}
+
+(GameVersion[], SimpleTrainerInfo) Trainer(Game game, JsonObject request)
+{
+    var t = request["trainer"]!.AsObject();
+    var versions = game.Versions;
+    if ((string?)request["version"] is { Length: > 0 } v)
+    {
+        if (!Enum.TryParse<GameVersion>(v, out var chosen) || !versions.Contains(chosen))
+            throw new ArgumentException("This version is incompatible with the selected game.");
+        versions = [chosen, .. versions.Where(x => x != chosen)];
+    }
+    return (versions, new SimpleTrainerInfo(versions[0])
+    {
+        OT = (string)t["ot"]!, TID16 = checked((ushort)(int)t["tid"]!), SID16 = checked((ushort)(int)t["sid"]!),
+        Language = (int)t["language"]!, Gender = (byte)(int)t["gender"]!,
+    });
 }
 
 JsonObject Make(Game game, JsonObject request)
@@ -92,59 +178,206 @@ JsonObject Make(Game game, JsonObject request)
         throw new ArgumentException("Level must be between 0 and 100.");
     var shiny = (bool?)request["shiny"] ?? false;
     var nickname = (string?)request["nickname"] ?? "";
-    var t = request["trainer"]!.AsObject();
-    var versions = game.Versions;
-    if ((string?)request["version"] is { Length: > 0 } v)
-    {
-        if (!Enum.TryParse<GameVersion>(v, out var chosen) || !versions.Contains(chosen))
-            throw new ArgumentException("This version is incompatible with the selected game.");
-        versions = [chosen, .. versions.Where(x => x != chosen)];
-    }
-    var trainer = new SimpleTrainerInfo(versions[0])
-    {
-        OT = (string)t["ot"]!, TID16 = checked((ushort)(int)t["tid"]!), SID16 = checked((ushort)(int)t["sid"]!),
-        Language = (int)t["language"]!, Gender = (byte)(int)t["gender"]!,
-    };
+    var wish = Wish.From(request["options"] as JsonObject);
+    var (versions, trainer) = Trainer(game, request);
     var blank = game.Blank();
     blank.Species = species;
-    string? firstProblem = null;
+    // Encounters are matched on the blank's gender: a female-only Vespiquen comes only from a female Combee.
+    var detail = game.Table[species];
+    var gender = detail.OnlyFemale ? Gender.Female : detail.OnlyMale ? Gender.Male
+        : detail.Genderless ? Gender.Random : wish.Gender ?? Gender.Random;
+    if (gender != Gender.Random)
+        blank.Gender = (byte)gender;
+    string? firstProblem = null, firstUnmet = null;
+    var lowest = int.MaxValue;
+    var shinyLocked = false;
     // The first encounter that stays legal with the requested level, shininess and nickname wins.
-    foreach (var encounter in EncounterMovesetGenerator.GenerateEncounters(blank, trainer, ReadOnlyMemory<ushort>.Empty, versions).Take(80))
+    // The first pass takes encounters as they come; the second lets an evolved Pokemon climb to its evolution level.
+    foreach (var climb in new[] { false, true })
     {
-        if (encounter is not IEncounterConvertible convertible)
-            continue;
-        var pk = convertible.ConvertToPKM(trainer);
-        if (pk.GetType() != blank.GetType() || !new LegalityAnalysis(pk).Valid)
-            continue;
-        // An egg or a pre-evolution encounter is evolved into the species asked for.
-        if (pk.Species != species)
+        foreach (var encounter in EncounterMovesetGenerator.GenerateEncounters(blank, trainer, ReadOnlyMemory<ushort>.Empty, versions).Take(80))
         {
-            pk.Species = species;
-            pk.ClearNickname();
+            if (encounter is not IEncounterConvertible convertible)
+                continue;
+            if (level > 0 && encounter.LevelMin > level)
+            {
+                lowest = Math.Min(lowest, encounter.LevelMin);
+                continue;
+            }
+            if (shiny && encounter.Shiny == Shiny.Never)
+            {
+                shinyLocked = true;
+                continue;
+            }
+            // Shininess is chosen while the encounter builds its PID: a Gen 3 to 5 PID rewritten afterwards
+            // no longer matches the RNG frame the legality check expects.
+            var criteria = wish.Criteria(detail) with { Gender = gender };
+            if (shiny)
+                criteria = criteria with { Shiny = Shiny.Always };
+            // The PID, IVs and, for a wild slot, the level are rolled at random; a roll can be refused or land
+            // above the level asked for, so an encounter gets several.
+            PKM? built = null, mendable = null;
+            for (var roll = 0; roll < 8 && built is null; roll++)
+            {
+                var rolled = convertible.ConvertToPKM(trainer, criteria);
+                if (rolled.GetType() != blank.GetType() || (level != 0 && rolled.CurrentLevel > level))
+                    continue;
+                if (new LegalityAnalysis(rolled).Valid)
+                    built = rolled;
+                // A gift of the species asked for can be invalid as generated (a missing handler or HOME tracker).
+                else if (rolled.Species == species)
+                    mendable ??= rolled;
+            }
+            built ??= mendable;
+            if (built is null)
+                continue;
+            // An egg or a pre-evolution encounter is evolved into the species asked for.
+            var evolved = built.Species != species;
+            if (evolved)
+            {
+                built.Species = species;
+                built.ClearNickname();
+                if (detail.Genderless)
+                    built.Gender = EntityGender.Genderless;
+                // A Galarian Farfetch'd (form 1) becomes Sirfetch'd, which has only form 0.
+                if (built.Form >= detail.FormCount)
+                    built.Form = 0;
+            }
+            if (level > 0 && level < built.CurrentLevel)
+                continue;
+            // An evolved Pokemon left at the level it was caught at can be below its evolution level: walk up.
+            var last = climb && evolved && level == 0 ? 100 : Math.Max(level, built.CurrentLevel);
+            for (var lv = Math.Max(level, built.CurrentLevel); lv <= last; lv++)
+            {
+                var pk = built.Clone();
+                if (lv > pk.CurrentLevel)
+                    pk.CurrentLevel = (byte)lv;
+                if (shiny && !pk.IsShiny)
+                    pk.SetIsShiny(true);
+                if (nickname.Length > 0)
+                    pk.SetNickname(nickname);
+                wish.Apply(pk);
+                var la = Mend(pk, evolved, encounter, trainer, wish);
+                var unmet = wish.Unmet(pk, strings);
+                if (la.Valid && unmet is null)
+                    return Describe(game, pk, la);
+                if (unmet is null)
+                    firstProblem ??= la.Report();
+                else
+                    firstUnmet ??= unmet;
+            }
         }
-        if (level > 0 && level < pk.CurrentLevel)
-            continue;
-        if (level > pk.CurrentLevel)
-            pk.CurrentLevel = (byte)Math.Min(level, 100);
-        pk.SetIsShiny(shiny);
-        if (nickname.Length > 0)
-            pk.SetNickname(nickname);
-        if (pk is PB7 pb7)
-        {
-            AwakeningUtil.SetSuggestedAwakenedValues(pb7, pb7);
-            pb7.ResetCalculatedValues();
-        }
-        pk.ResetPartyStats();
-        pk.RefreshChecksum();
-        var la = new LegalityAnalysis(pk);
-        if (la.Valid)
-            return Describe(game, pk, la);
-        firstProblem ??= la.Report();
     }
     var name = strings.specieslist[species];
-    throw new InvalidOperationException(firstProblem is null
-        ? $"PKHeX has no legal {name} for this game."
-        : $"No legal {name} with these choices. {firstProblem}");
+    throw new InvalidOperationException(firstProblem is not null
+        ? $"No legal {name} with these choices. {firstProblem}"
+        : firstUnmet is not null
+            ? $"No legal {name} in this game has {firstUnmet}."
+        : lowest != int.MaxValue
+            ? $"{name} cannot be lower than level {lowest} in this game."
+            : shinyLocked
+                ? $"{name} cannot be shiny in this game."
+                : $"PKHeX has no legal {name} for this game.");
+}
+
+// Repairs a built record one step at a time, each step on top of the last, and stops at the first that is legal.
+LegalityAnalysis Mend(PKM pk, bool evolved, IEncounterTemplate encounter, ITrainerInfo trainer, Wish wish)
+{
+    var la = Refresh(pk, wish);
+    if (la.Valid)
+        return la;
+    var repairs = new List<Action>();
+    // Event Pokemon that Sword/Shield received only through HOME (Zeraora, Melmetal) carry a HOME tracker.
+    // This comes first: a refit would replace the event's fixed moves.
+    if (encounter is MysteryGift && pk is IHomeTrack { HasTracker: false } home)
+        repairs.Add(() => home.Tracker = (ulong)Random.Shared.NextInt64(1, long.MaxValue));
+    // Moves, relearn moves and move flags depend on the species and level just set.
+    repairs.Add(() => Refit(pk));
+    if (evolved)
+        // The ability keeps its slot but names the species it was caught as.
+        repairs.Add(() => { pk.RefreshAbility(pk.AbilityNumber >> 1 & 3); Refit(pk); });
+    if (pk.HandlingTrainerName.Length == 0)
+        repairs.Add(() =>
+        {
+            // A trade evolution has been through a trade, and some gifts (Z-A's Magearna) arrive already handled.
+            pk.CurrentHandler = 1;
+            pk.HandlingTrainerName = "PkCamp";
+            pk.HandlingTrainerGender = (byte)(1 - trainer.Gender);
+            if (pk is IHandlerLanguage language)
+                language.HandlingTrainerLanguage = (byte)trainer.Language;
+            Refit(pk);
+        });
+    if (evolved)
+    {
+        // Evolutions that count something (critical hits, damage taken, Rage Fist uses, coins) start from that count.
+        if (FormArgumentUtil.GetFormArgumentMinEvolution(pk.Species, encounter.Species) is var counted and not 0)
+            repairs.Add(() => { FormArgumentUtil.ChangeFormArgument(pk, counted); Refit(pk); });
+        // BDSP's Milotic evolves at Beauty 170; poffins that raise Beauty also raise Sheen.
+        if (pk is PB8 pb8 && HowEvolved(pk) is { Method: EvolutionType.LevelUpBeauty } beauty)
+            repairs.Add(() =>
+            {
+                pb8.ContestBeauty = (byte)beauty.Argument;
+                pb8.ContestSheen = ContestStatInfo.CalculateMinimumSheen8b(pb8, pb8.Nature, ContestStatInfo.GetReferenceTemplate(encounter));
+            });
+    }
+    foreach (var repair in repairs)
+    {
+        try
+        {
+            repair();
+        }
+        catch (IndexOutOfRangeException)
+        {
+            // PKHeX's move suggester indexes past a learnset some forms lack; this candidate stays as it was.
+            continue;
+        }
+        la = Refresh(pk, wish);
+        if (la.Valid)
+            break;
+    }
+    return la;
+}
+
+// The method that turned the species before this one into the record's species, if PKHeX has one.
+static EvolutionMethod? HowEvolved(PKM pk)
+{
+    var tree = EvolutionTree.GetEvolutionTree(pk.Context);
+    foreach (var (species, form) in tree.Reverse.GetPreEvolutions(pk.Species, pk.Form))
+        foreach (var method in tree.Forward.GetForward(species, form).Span)
+            if (method.Species == pk.Species)
+                return method;
+    return null;
+}
+
+LegalityAnalysis Refresh(PKM pk, Wish? wish = null)
+{
+    if (pk is PB7 pb7)
+    {
+        AwakeningUtil.SetSuggestedAwakenedValues(pb7, pb7);
+        wish?.ApplyEffort(pk);
+        pb7.ResetCalculatedValues();
+    }
+    pk.ResetPartyStats();
+    pk.RefreshChecksum();
+    return new LegalityAnalysis(pk);
+}
+
+void Refit(PKM pk)
+{
+    pk.SetMoveset();
+    pk.SetRelearnMoves(new LegalityAnalysis(pk));
+    // A TM or TR move the suggested moveset holds is legal only with its record flag (Sword/Shield's TRs).
+    if (pk is ITechRecord record)
+        record.SetRecordFlags(pk, TechnicalRecordApplicatorOption.LegalCurrent);
+    if (pk is IPlusRecord plus && pk.PersonalInfo is IPermitPlus permit)
+        PlusRecordApplicator.SetPlusFlags(plus, pk, permit, PlusRecordApplicatorOption.LegalCurrent);
+    if (pk is IMoveShop8Mastery shop)
+        shop.SetMoveShopFlags(pk);
+    if (pk is PA8 pa8)
+    {
+        pa8.ResetHeight();
+        pa8.ResetWeight();
+    }
 }
 
 JsonObject Check(Game game, byte[] data, JsonObject request)
@@ -240,8 +473,10 @@ JsonObject Describe(Game game, PKM pk, LegalityAnalysis la)
         ["shiny"] = pk.IsShiny,
         ["nickname"] = pk.Nickname,
         ["ot"] = pk.OriginalTrainerName,
-        ["nature"] = strings.natures[(int)pk.Nature],
+        ["nature"] = strings.natures[(int)pk.StatAlignment],
         ["ball"] = strings.balllist[pk.Ball],
+        ["ability"] = game.Context == EntityContext.Gen9a ? "" : strings.abilitylist[pk.Ability],
+        ["held_item"] = pk.HeldItem == 0 ? "" : strings.GetItemStrings(game.Context, game.Versions[0])[pk.HeldItem],
         ["moves"] = moves,
         ["encounter"] = la.EncounterOriginal.LongName,
         ["legal"] = la.Valid,
@@ -268,6 +503,132 @@ static byte[] DecryptedParty(PKM pk)
     var data = new byte[pk.SIZE_PARTY];
     pk.WriteDecryptedDataParty(data);
     return data;
+}
+
+// The offer options a request asks for; a stat array is HP, Atk, Def, SpA, SpD, Spe and -1 leaves a stat alone.
+record Wish(Nature? Nature, int? Ability, Gender? Gender, int[] IVs, int[] Effort, int? Item, byte? Ball)
+{
+    static readonly string[] Stats = ["hp", "atk", "def", "spa", "spd", "spe"];
+    static readonly string[] StatNames = ["HP", "Attack", "Defense", "Sp. Atk", "Sp. Def", "Speed"];
+
+    public static Wish From(JsonObject? o)
+    {
+        int[] Read(string key)
+        {
+            var group = o?[key] as JsonObject;
+            return [.. Stats.Select(s => group?[s] is { } v ? (int)v : -1)];
+        }
+        int? Number(string key) => o?[key] is { } v ? (int)v : null;
+        var ivs = Read("ivs");
+        var effort = Read("effort");
+        if (ivs.Any(v => v > 31) || effort.Any(v => v > 252))
+            throw new ArgumentException("An IV is at most 31 and an effort value at most 252.");
+        if (Number("nature") is < 0 or > 24)
+            throw new ArgumentException("Unknown nature.");
+        return new Wish(Number("nature") is { } n ? (Nature)n : null, Number("ability"),
+            Number("gender") is { } g ? (Gender)g : null, ivs, effort,
+            Number("held_item"), Number("ball") is { } b ? checked((byte)b) : null);
+    }
+
+    public EncounterCriteria Criteria(IPersonalInfo detail) => EncounterCriteria.Unrestricted with
+    {
+        Nature = Nature ?? PKHeX.Core.Nature.Random,
+        Ability = Ability is { } a ? Permission(detail, a) : AbilityPermission.Any12H,
+        IV_HP = (sbyte)IVs[0], IV_ATK = (sbyte)IVs[1], IV_DEF = (sbyte)IVs[2],
+        IV_SPA = (sbyte)IVs[3], IV_SPD = (sbyte)IVs[4], IV_SPE = (sbyte)IVs[5],
+    };
+
+    static AbilityPermission Permission(IPersonalInfo detail, int ability)
+    {
+        var first = detail.GetAbilityAtIndex(0) == ability;
+        var second = detail.AbilityCount > 1 && detail.GetAbilityAtIndex(1) == ability;
+        return first && second ? AbilityPermission.Any12 : first ? AbilityPermission.OnlyFirst
+            : second ? AbilityPermission.OnlySecond : AbilityPermission.OnlyHidden;
+    }
+
+    // An encounter that rolled another nature, ability or a lower IV is moved there the way a player would:
+    // a mint (Sword/Shield onward), an ability capsule or patch, hyper training. The legality check judges it.
+    public void Apply(PKM pk)
+    {
+        if (Nature is { } nature && pk.StatAlignment != nature && pk.Format >= 8)
+            pk.StatAlignment = nature;
+        if (Ability is { } ability && pk.Ability != ability)
+        {
+            var pi = pk.PersonalInfo;
+            for (var slot = 0; slot < pi.AbilityCount; slot++)
+                if (pi.GetAbilityAtIndex(slot) == ability)
+                {
+                    pk.RefreshAbility(slot);
+                    break;
+                }
+        }
+        if (pk is IHyperTrain train)
+            for (var i = 0; i < 6; i++)
+                if (IVs[i] == 31 && IV(pk, i) != 31 && !train.IsHyperTrained(Battle(i)))
+                    train.HyperTrainInvert(Battle(i));
+        if (Item is { } item)
+            pk.HeldItem = item;
+        if (Ball is { } ball)
+            pk.Ball = ball;
+        ApplyEffort(pk);
+        // Gen 3 and 4 raise an EV past 100 (the vitamin cap) only in battle, so the record must have gained
+        // experience since it was met; one point stays below the next level.
+        if (pk.Format < 5 && Effort.Any(v => v > EffortValues.MaxVitamins34) && pk.CurrentLevel < 100 &&
+            pk.EXP + 1 < Experience.GetEXP((byte)(pk.CurrentLevel + 1), pk.PersonalInfo.EXPGrowth))
+            pk.EXP += 1;
+    }
+
+    public void ApplyEffort(PKM pk)
+    {
+        for (var i = 0; i < 6; i++)
+        {
+            if (Effort[i] < 0)
+                continue;
+            var v = (byte)Effort[i];
+            switch (pk)
+            {
+                case IAwakened av:
+                    av.SetAV(Battle(i), v);
+                    break;
+                // The effort level Legends Arceus shows is the stored value plus a bias from the IV (3 at 31).
+                case IGanbaru gv:
+                    gv.SetGV(Battle(i), (byte)Math.Max(0, v - GanbaruExtensions.GetBias(IV(pk, i))));
+                    break;
+                default:
+                    _ = i switch
+                    {
+                        0 => pk.EV_HP = v, 1 => pk.EV_ATK = v, 2 => pk.EV_DEF = v,
+                        3 => pk.EV_SPA = v, 4 => pk.EV_SPD = v, _ => pk.EV_SPE = v,
+                    };
+                    break;
+            }
+        }
+    }
+
+    // The first choice the record does not carry, in words, or null when it carries all of them.
+    public string? Unmet(PKM pk, GameStrings strings)
+    {
+        if (Nature is { } nature && pk.StatAlignment != nature)
+            return $"a {strings.natures[(int)nature]} nature";
+        if (Ability is { } ability && pk.Ability != ability)
+            return $"the ability {strings.abilitylist[ability]}";
+        if (Gender is { } gender && pk.Gender != (byte)gender)
+            return gender == PKHeX.Core.Gender.Female ? "a female" : "a male";
+        for (var i = 0; i < 6; i++)
+            if (IVs[i] >= 0 && IV(pk, i) != IVs[i] && !(IVs[i] == 31 && pk is IHyperTrain t && t.IsHyperTrained(Battle(i))))
+                return $"{StatNames[i]} IV {IVs[i]}";
+        if (Ball is { } ball && pk.Ball != ball)
+            return $"a {strings.balllist[ball]}";
+        return null;
+    }
+
+    // PKHeX's stat index order puts Speed fourth (H/A/B/S/C/D).
+    static int Battle(int i) => i switch { 3 => 4, 4 => 5, 5 => 3, _ => i };
+
+    static int IV(PKM pk, int i) => i switch
+    {
+        0 => pk.IV_HP, 1 => pk.IV_ATK, 2 => pk.IV_DEF, 3 => pk.IV_SPA, 4 => pk.IV_SPD, _ => pk.IV_SPE,
+    };
 }
 
 record Game(GameVersion[] Versions, IPersonalTable Table, EntityContext Context, Func<PKM> Blank,

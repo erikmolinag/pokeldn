@@ -1,17 +1,19 @@
-# pokeldn 0.2.0
+# pokeldn 0.2.2
 
 This desktop app trades with seven Pokemon game families on a Switch or Switch 2
 through an ESP32 radio connected by USB. Nothing is installed on the console.
 
 ## What is new
 
-- The Pokemon picker shows the species' pixel-art sprite, and the shiny sprite when Shiny is on.
-  Sprites come from PokeAPI's sprite repository, are drawn without smoothing, and are saved on the
-  computer after the first download. A computer that has never been online shows a placeholder icon
-  and everything else works. Settings has a switch for the downloads and a button that clears the
-  cache.
-- The ESP32 firmware carries a version, shown on Board after Identify.
-- The driver links on the Board page for CP210x and CH340 adapters are visible buttons.
+- Evolved Pokemon build legally far more often. An evolved species takes the ability of its own
+  species, a trade evolution (Alakazam, Politoed, Scizor and similar) receives a second handling
+  trainer, and evolutions that count something (Sirfetch'd, Runerigus, Annihilape, Gholdengo) start
+  from that count. Plain builds that failed fall from 48 to 7 in Brilliant Diamond and Shining Pearl,
+  from 7 to 0 in Let's Go and from 4 to 0 in Legends Arceus.
+- A build no longer fails at random. A wild encounter's level and personality are rolled at random, and
+  about one build in ten of a chosen level was refused; each encounter now gets several rolls.
+- A level below the lowest one a game offers says so, for example "Mewtwo cannot be lower than level
+  100 in this game".
 
 ## Downloads
 
@@ -31,8 +33,9 @@ The separate `pokeldn-radio*.bin` files are merged firmware images for manual fl
 1. Extract the macOS or Linux archive, or launch the Windows executable. On macOS, the app is
    unsigned; use right-click, Open for the first launch.
 2. Choose `prod.keys` when prompted.
-3. Connect one supported board with a USB data cable. S3 and C3 boards use native USB Serial/JTAG;
-   attach the external antenna on a Seeed Studio XIAO ESP32C3.
+3. Connect one supported board with a USB data cable. S3 and C3 boards use native USB Serial/JTAG.
+   A board that ships an external antenna, such as the Seeed Studio XIAO ESP32C3 or XIAO ESP32S3,
+   needs it attached; larger S3 boards such as the N8R2 and N16R8 have an onboard antenna.
 4. On Board, select the port, press Flash, then Identify.
 5. On Games, choose a game and a tool, build an offer or select a Pokemon file, and follow the
    console instructions before starting.

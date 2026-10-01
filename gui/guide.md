@@ -21,6 +21,15 @@ the radio. Nothing is installed on the console.
    the trainer in Settings.
 4. Follow the steps under On the console, then press Start.
 
+More options, under the species, sets the nature, ability, gender, held item, ball, IVs and EVs (AVs in
+Let's Go, effort levels in Legends Arceus). Empty fields stay random. The lists hold only what the
+species can legally have in that game, and Build refuses a combination PKHeX finds illegal, with the
+reason.
+
+Add a trade, below the Pokemon, queues up to six for one session; each completed trade offers the
+next. It shows on every trade tool except Let's Go join, Sword/Shield and Legends Z-A join, which trade
+once per session. Each trade's received Pokemon gets its own file.
+
 The Pokemon the console sends you are saved in `Documents/pokeldn/Received`.
 
 ## Basic and All options
@@ -28,6 +37,11 @@ The Pokemon the console sends you are saved in `Documents/pokeldn/Received`.
 Basic shows the fields most runs need; the tested settings for each game are applied underneath. All
 options lists every option the game's session accepts, with its own help text. A value set there
 overrides the Basic field.
+
+The settings most players never change sit at the top of All options, already set: the time limit
+before a session stops on its own, the wireless channel, and New PID each run. New PID gives each
+offered Pokemon a new PID so a save that already received it takes it again; turn it off for a file
+whose PID must stay, such as an event Pokemon.
 
 ## Your own Pokemon files
 
