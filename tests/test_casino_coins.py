@@ -36,6 +36,16 @@ def test_the_delivery_man_hands_over_the_coins_with_the_fanfare():
     assert any("9999 COINS" in text for text in _said(vm))
 
 
+def test_the_player_is_released_only_after_the_fanfare():
+    # Released mid-fanfare, stairs reset Task_Fanfare and leave the BGM paused; the next warp to
+    # other music then never finishes fading and the screen stays black. Seen on a retail FireRed.
+    vm = ScriptVM(_ram_script(), coins=0).run()
+    assert vm.release_count == 1 and vm.releases_during_fanfare == 0
+    lines = scrcmd.disassemble(_ram_script(), scrcmd.RAM_SCRIPT_VIRTUAL_BASE, limit=80)
+    ops = [line.split()[2] for line in lines]
+    assert ops[ops.index("playfanfare") + 1] == "waitfanfare"
+
+
 def test_below_the_cap_the_coins_top_up_to_it():
     assert ScriptVM(_ram_script(), coins=4321).run().coins == 9999
 
@@ -76,7 +86,7 @@ def test_a_stage_carries_one_fallible_reward_coins_included():
 
 def test_the_gift_is_registered_repeatable_and_the_same_for_every_cartridge():
     assert wce.GIFT_CASINO_COINS in gift_registry.GIFT_REGISTRY.live_choices
-    assert gift_registry.GIFT_REGISTRY.default_flag_id(wce.GIFT_CASINO_COINS) == 1009
+    assert gift_registry.GIFT_REGISTRY.default_flag_id(wce.GIFT_CASINO_COINS) == 1010
     assert wce.CASINO_COINS_GIFT.event.repeatable
     assert wce.CASINO_COINS_GIFT.for_build is None
 

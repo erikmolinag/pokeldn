@@ -42,6 +42,8 @@ class ScriptVM:
         self.prepared_battle = None
         self.messages = []
         self.fanfares = []
+        self.fanfare_playing = False            # playfanfare seen, no waitfanfare yet
+        self.releases_during_fanfare = 0
         self.release_count = 0
         self.ended = False
 
@@ -79,6 +81,10 @@ class ScriptVM:
                 return self
             if op == 0x6C:  # release
                 self.release_count += 1
+                self.releases_during_fanfare += self.fanfare_playing
+                continue
+            if op == 0x32:  # waitfanfare
+                self.fanfare_playing = False
                 continue
             if op in (0x5A, 0x68, 0x6A, 0x6C, 0x66, 0x6D):
                 continue
@@ -118,6 +124,7 @@ class ScriptVM:
                 self.comparison = 1 if self.u16() in self.flags else 0
             elif op == 0x31:  # playfanfare
                 self.fanfares.append(self.u16())
+                self.fanfare_playing = True
             elif op == 0x42:  # getplayerxy
                 x, y = self.u16(), self.u16()
                 self.vars[x], self.vars[y] = 10, 20

@@ -36,8 +36,8 @@ from pokeldn.frlg.rom.scrcmd import (
     OP_SETVAR_OR_COPY as _OP_SETVAR_OR_COPY, OP_SETWILDBATTLE as _OP_SETWILDBATTLE,
     OP_SPECIAL as _OP_SPECIAL, OP_SPECIALVAR as _OP_SPECIALVAR, OP_VGOTO as _OP_VGOTO,
     OP_VGOTO_IF as _OP_VGOTO_IF, OP_VMESSAGE as _OP_VMESSAGE,
-    OP_WAITBUTTONPRESS as _OP_WAITBUTTONPRESS, OP_WAITMESSAGE as _OP_WAITMESSAGE,
-    RAM_SCRIPT_VIRTUAL_BASE as _RAM_SCRIPT_VIRTUAL_BASE, STD_OBTAIN_ITEM as _STD_OBTAIN_ITEM,
+    OP_WAITBUTTONPRESS as _OP_WAITBUTTONPRESS, OP_WAITFANFARE as _OP_WAITFANFARE,
+    OP_WAITMESSAGE as _OP_WAITMESSAGE, RAM_SCRIPT_VIRTUAL_BASE as _RAM_SCRIPT_VIRTUAL_BASE, STD_OBTAIN_ITEM as _STD_OBTAIN_ITEM,
     VAR_0x8000 as _VAR_0x8000, VAR_0x8001 as _VAR_0x8001, VAR_0x8002 as _VAR_0x8002,
     VAR_0x8003 as _VAR_0x8003, VAR_PLAYER_X as _VAR_PLAYER_X, VAR_PLAYER_Y as _VAR_PLAYER_Y,
     VAR_RESULT as _VAR_RESULT,
@@ -938,7 +938,12 @@ def _emit_action(builder, action, *, sprite_id, failure_label, completed_label):
         builder.emit(bytes([_OP_ADDCOINS]) + _u16(action.amount))
         builder.emit(_compare(_VAR_RESULT, 1))
         builder.vgoto_if(_COMPARE_EQ, failure_label)
-        builder.emit(bytes([_OP_PLAYFANFARE]) + _u16(MUS_OBTAIN_ITEM))
+        # PlayFanfare pauses the map BGM and only Task_Fanfare resumes it, 160 frames later
+        # [decomp:src/sound.c:190-267]. Nothing follows the coins, so without waitfanfare the player
+        # is released at once. Stairs taken within those frames run ResetTasks [src/overworld.c:2105],
+        # the BGM stays paused, and the next warp to other music waits on a fade that a paused player
+        # never runs [src/sound.c:86-91, src/m4a_1.s MPlayMain]: a black screen on leaving the centre.
+        builder.emit(bytes([_OP_PLAYFANFARE]) + _u16(MUS_OBTAIN_ITEM) + bytes([_OP_WAITFANFARE]))
     elif isinstance(action, GivePokemon):
         if action.moves or action.fateful_encounter:
             builder.emit(bytes([_OP_GETPARTYSIZE]))

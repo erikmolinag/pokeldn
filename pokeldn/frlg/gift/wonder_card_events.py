@@ -1596,9 +1596,11 @@ MASTER_BALL_GIFT = WonderGift(
 
 
 GIFT_CASINO_COINS = "casino-coins"
-# Shared with mystery-event-probe, a probe of the console rather than a gift a player keeps: one bound
+# Shared with mystery-event-celebi, a probe of the console rather than a gift a player keeps: one bound
 # card at a time either way, and this one is repeatable, so its receipt flag never gates anything.
-CASINO_COINS_FLAG_ID = 1009
+# The first release used 1009 without waitfanfare; a console holding that card refuses the same id
+# as "already has this card" [MysteryGift_CompareCardFlags], so the fixed card takes a new one.
+CASINO_COINS_FLAG_ID = 1010
 CASINO_COINS_AMOUNT = MAX_COINS
 
 # Game Corner coins from the delivery man, through the field script's own `addcoins`: no address, so
