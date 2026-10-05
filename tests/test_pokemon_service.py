@@ -7,10 +7,11 @@ from pathlib import Path
 import pytest
 
 from pokeldn import gen8, gen9, pokemon
+from pokeldn.app.settings import Settings
 from pokeldn.pla import pokemon as pa8
 from pokeldn.swsh import wc8
 
-TRAINER = {"ot": "PkCamp", "tid": 12345, "sid": 54321, "language": 2, "gender": 0}
+TRAINER = {"ot": "POKELDN", "tid": 12345, "sid": 54321, "language": 2, "gender": 0}
 FORMATS = {"frlg": "PK3", "lgpe": "PB7", "swsh": "PK8", "bdsp": "PB8", "pla": "PA8", "sv": "PK9", "za": "PA9"}
 
 
@@ -38,9 +39,30 @@ def test_creation_import_and_launcher_preparation_remain_legal(service, game):
     imported = service.import_file(game, built["file"])
     assert imported["legal"] and imported["format"] == FORMATS[game]
     assert imported["file"] != built["file"]
-    offer = pokemon.prepare_file(game, imported["file"])
+    offer = pokemon.prepare_file(game, imported["file"], fresh=True)   # the launchers' --fresh-pid
     final = service.check_bytes(game, Path(offer).read_bytes())
     assert final["legal"] and final["ot"] == imported["ot"]
+    assert "Event" not in built["encounter"]   # Pikachu has wild and egg encounters in every game
+
+
+@pytest.mark.parametrize("game", FORMATS)
+def test_a_built_pokemon_shows_the_trainer_id_typed_in_settings(service, game):
+    """FireRed shows the 16-bit TID; a Switch title shows the 32-bit id as six digits and a secret ID,
+    here the largest pair 32 bits hold. PKHeX's DisplayTID reads them back."""
+    settings = Settings(tid=12345, sid=54321, switch_tid=967295, switch_sid=4294)
+    built = service.make(game, 25, settings.trainer(game))
+    shown = (12345, 54321) if game == "frlg" else (967295, 4294)
+    assert (built["trainer_id"], built["secret_id"]) == shown and built["legal"]
+
+
+def test_an_event_pokemon_offered_under_a_new_pid_keeps_its_own(service, capsys):
+    """Melmetal reaches Sword only as an event; its PID is part of the event."""
+    built = service.make("swsh", 809, TRAINER)
+    assert "Event" in built["encounter"] or "Gift" in built["encounter"]
+    offer = Path(pokemon.prepare_file("swsh", built["file"], fresh=True)).read_bytes()
+    assert service.check_bytes("swsh", offer)["legal"]
+    assert offer[:4] == base64.b64decode(built["data"])[:4]   # the encryption constant
+    assert "kept its own PID" in capsys.readouterr().out
 
 
 @pytest.mark.parametrize("game, species, edit", [
@@ -164,7 +186,7 @@ def test_corrupt_records_and_illegal_final_edits_are_refused(service):
 
 
 def test_a_fixed_event_trainer_cannot_be_overwritten(service):
-    built = service.make("swsh", 25, TRAINER)
+    built = service.make("swsh", 809, TRAINER)
     assert built["ot"] != TRAINER["ot"]
     with pytest.raises(pokemon.BuilderError):
         service.prepare("swsh", base64.b64decode(built["data"]), fields={"ot_name": "Changed"})
@@ -183,6 +205,10 @@ def test_full_pb7_import_is_saved_in_the_launchers_box_format(service, tmp_path)
 def test_gifts_need_no_game_image_and_reject_unsafe_ids(service):
     good = wc8.pokemon_card(25, level=25)
     assert service.validate_gift(good)["valid"]
+    # 3 is the game's random gender (main 0x010b62ac); 4 has no meaning
+    assert service.validate_gift(wc8.pokemon_card(25, gender=3))["valid"]
+    with pytest.raises(pokemon.BuilderError, match="gender"):
+        service.validate_gift(wc8.pokemon_card(25, gender=4))
     with pytest.raises(pokemon.BuilderError, match="checksum"):
         service.validate_gift(bytes(720))
     for fields in ({"held_item": 65535}, {"move1": 65535}, {"species": 9999}):
@@ -191,3 +217,108 @@ def test_gifts_need_no_game_image_and_reject_unsafe_ids(service):
             service.validate_gift(wc8.pokemon_card(**args))
     with pytest.raises(pokemon.BuilderError, match="species"):
         service.validate_gift(wc8.pokemon_card(1, form=255))
+
+
+GARCHOMP = """Garchomp @ Choice Scarf
+Ability: Rough Skin
+Tera Type: Steel
+EVs: 252 Atk / 4 SpD / 252 Spe
+Jolly Nature
+- Outrage
+- Earthquake
+- Stone Edge
+- Spikes
+"""
+ROTOM = """Sparky (Rotom-Wash) (M) @ Leftovers
+Ability: Levitate
+Level: 50
+Shiny: Yes
+EVs: 252 HP / 252 SpA / 4 Spe
+Modest Nature
+IVs: 0 Atk
+- Hydro Pump
+- Volt Switch
+- Will-O-Wisp
+- Protect
+"""
+CHARIZARD = """Charizard @ Leftovers
+Ability: Blaze
+Timid Nature
+- Flamethrower
+- Fly
+- Dragon Claw
+"""
+# PKHeX's own French and Japanese exports (ShowdownSet.GetText) of CHARIZARD and of part of GARCHOMP.
+CHARIZARD_FR = """Dracaufeu @ Restes
+Talent : Brasier
+Nature : Timide
+- Lance-Flammes
+- Vol
+- Draco-Griffe
+"""
+GARCHOMP_JA = """ガブリアス @ こだわりスカーフ
+特性 さめはだ
+努力値 252 攻撃 / 4 特防 / 252 素早さ
+ようき性格
+- げきりん
+- じしん
+"""
+
+
+@pytest.mark.parametrize("game, text, expect", [
+    ("sv", GARCHOMP, {"species": "Garchomp", "nature": "Jolly", "ability": "Rough Skin", "level": 100,
+                      "held_item": "Choice Scarf", "moves": ["Outrage", "Earthquake", "Stone Edge", "Spikes"]}),
+    ("swsh", ROTOM, {"species": "Rotom", "form": "Wash", "nickname": "Sparky", "shiny": True, "level": 50,
+                     "nature": "Modest", "held_item": "Leftovers",
+                     "moves": ["Hydro Pump", "Volt Switch", "Will-O-Wisp", "Protect"]}),
+    ("frlg", CHARIZARD, {"species": "Charizard", "nature": "Timid", "held_item": "Leftovers",
+                         "moves": ["Flamethrower", "Fly", "Dragon Claw"]}),
+    ("frlg", CHARIZARD_FR, {"species": "Charizard", "nature": "Timid", "held_item": "Leftovers",
+                            "moves": ["Flamethrower", "Fly", "Dragon Claw"]}),
+    ("sv", GARCHOMP_JA, {"species": "Garchomp", "nature": "Jolly", "ability": "Rough Skin",
+                         "held_item": "Choice Scarf", "moves": ["Outrage", "Earthquake"]}),
+])
+def test_a_showdown_set_builds_a_legal_pokemon_carrying_what_it_names(service, game, text, expect):
+    found, = service.paste(game, text, TRAINER)
+    assert found["errors"] == []
+    built = service.make(game, found["species_id"], TRAINER, found["level"], found["shiny"], found["nickname"],
+                         options=found["options"])
+    assert built["legal"]
+    for key, value in expect.items():
+        assert built[key] == value, key
+
+
+def test_a_paste_reads_stats_in_the_order_its_text_names_them(service):
+    """PKHeX's parser holds Speed fourth; the text says 252 Spe and 4 SpD."""
+    found, = service.paste("sv", GARCHOMP, TRAINER)
+    assert found["options"]["effort"] == {"hp": 0, "atk": 252, "def": 0, "spe": 252, "spa": 0, "spd": 4}
+    rotom, = service.paste("swsh", ROTOM, TRAINER)
+    assert rotom["options"]["ivs"]["atk"] == 0 and rotom["options"]["ivs"]["spe"] == 31
+
+
+@pytest.mark.parametrize("game, text, error", [
+    ("frlg", GARCHOMP, "Garchomp is not in this game."),
+    ("sv", "Pikachu\nAbility: Levitate", "Pikachu cannot have Levitate."),
+    ("sv", "Pikachu\n- Thunderbolt\n- Flarp", "Move not recognized: Flarp"),
+    ("sv", "hello\nfoo", "The first line names no Pokemon."),
+])
+def test_a_set_the_game_cannot_take_is_refused_with_the_reason(service, game, text, error):
+    found = service.paste(game, text, TRAINER)[0]
+    assert error in found["errors"]
+
+
+@pytest.mark.parametrize("game, text, note", [
+    ("sv", GARCHOMP, "Tera Type"),
+    ("lgpe", "Pikachu\nEVs: 252 Spe\n- Thunderbolt", "no EVs"),
+])
+def test_a_value_the_builder_does_not_set_is_reported(service, game, text, note):
+    found, = service.paste(game, text, TRAINER)
+    assert any(note in n for n in found["notes"])
+    assert "effort" not in found["options"] or game != "lgpe"
+
+
+def test_a_team_paste_returns_every_set_in_order(service):
+    """Showdown's team export opens with a header line, and a paste may mix languages."""
+    sets = service.paste("sv", "=== [gen9] Team ===\n\n" + GARCHOMP + "\n\n" + ROTOM + "\n" + GARCHOMP_JA, TRAINER)
+    assert [s["species"] for s in sets] == ["Garchomp", "Rotom", "Garchomp"]
+    assert all(s["errors"] == [] for s in sets)

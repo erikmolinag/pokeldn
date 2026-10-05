@@ -14,7 +14,7 @@ pytestmark = pytest.mark.skipif(not bs.emulation_available(), reason="needs unic
 
 CARTRIDGES = [pytest.param(builds.BPRE, "scratchpad/frlg_en/FireRed_e.gba", id="BPRE"),
               pytest.param(builds.BPGE, "scratchpad/frlg_en/LeafGreen_e.gba", id="BPGE")]
-TRAINER_ID = 0xE5BBDF65
+TRAINER_ID = 0x0AE73039
 FUNC_RUN = 4                        # client->funcId once the payload returns 1 [mystery_gift_client.c:17]
 FRENCH_INTR_VBLANK = builds.BPRF.intr_vblank
 NOENCOUNTER_FLAG = 0x020386D8
@@ -36,7 +36,7 @@ def _payload(build, **fields):
 def _console(code, build, rom, memory=None):
     """The payload in gDecompressionBuffer, the save blocks behind this build's pointers."""
     sav2 = bytearray(0xF24)
-    sav2[0:8] = bytes([0xC1, 0xCF, 0xCC, 0xD0, 0xBB, 0xC8, 0xFF, 0])       # GURVAN
+    sav2[0:8] = bytes([0xCA, 0xC9, 0xC5, 0xBF, 0xC6, 0xBE, 0xC8, 0xFF])  # POKELDN
     sav2[0x0A:0x0E] = TRAINER_ID.to_bytes(4, "little")
     memory = {build.sb2ptr: bs.SAV2_ADDRESS.to_bytes(4, "little"),
               build.sb1ptr: bs.SAV1_ADDRESS.to_bytes(4, "little"),
@@ -159,22 +159,26 @@ def _unstage(field_script):
 
 
 @pytest.mark.parametrize("build, path", CARTRIDGES)
-def test_moms_loader_installs_the_hook_kept_in_the_save(build, path):
+def test_moms_script_installs_the_hook_kept_in_the_save(build, path):
     """The field script the resident-save card binds to MOM, run on a save holding the noencounter
-    blob that save-write --resident puts at SaveBlock2 + 0xB20."""
+    blob that save-write --resident puts at SaveBlock2 + 0xB20: the staged trampoline reads
+    gSaveBlock1Ptr and branches into install-kept in the RAM script's body."""
     from unicorn import arm_const as a
-    field = ns.build_loader_script(
-        base=bs.RESIDENT_SAVE_STAGING, size=bs.RESIDENT_SAVE_SIZE,
-        magic=bs.RESIDENT_SAVE_MAGIC, build=build)
+    tail = bytes([ns.SCR_PLAYSE]) + ns.SE_SUCCESS.to_bytes(2, "little") + bytes([ns.SCR_WAITSE,
+                                                                                 ns.SCR_END])
+    field = ns.build_body_script(
+        bs.build_install_kept(build)[bs.INSTALL_KEPT_THUMB_ENTRY:], tail, build=build)
     assert field in wce.build_resident_save_script(build=build)
     base, stub, target = _unstage(field)
     machine = _console(b"\x00" * 4, build, _image(path), {
         build.intr_vblank: (build.vblank_intr | 1).to_bytes(4, "little"),
         bs.SAV2_ADDRESS + 0xB20: bs.build_resident_save_blob("noencounter", build=build),
+        bs.SAV1_ADDRESS + ns.RAMSCRIPT_MAGIC_OFFSET: bytes([ns.RAM_SCRIPT_MAGIC, 0, 0, 0]) + field,
         base: stub})
     uc = machine.uc
     uc.reg_write(a.UC_ARM_REG_SP, 0x03007D00)
-    uc.reg_write(a.UC_ARM_REG_LR, STOP)
+    uc.reg_write(a.UC_ARM_REG_LR, STOP | 1)
+    uc.reg_write(a.UC_ARM_REG_CPSR, uc.reg_read(a.UC_ARM_REG_CPSR) | (1 << 5))
     uc.emu_start(target, STOP, count=2_000_000)
     assert uc.reg_read(a.UC_ARM_REG_PC) == STOP
     assert _word(machine, build.intr_vblank) == ns.RESIDENT_BASE | 1

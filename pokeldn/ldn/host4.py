@@ -42,7 +42,7 @@ def packet_iv(network_id_le, sender_mac, nonce8, source_id=0):
 
 
 def build_host_response(joiner_constant, joiner_variable, ack_id, account=None, session=None,
-                        name="PkCamp", token=None):
+                        name="POKELDN", token=None):
     """The 840-byte accepted 0x14 connection response a retail Sword sends a joiner; 0x37 is the
     gate the receiver checks under 5, and the ack id closes the message."""
     out = bytearray(RESPONSE_SIZE)
@@ -96,7 +96,7 @@ class Pia4Host:
     """Everything below the game: seat a joiner, keep the mesh, carry both reliable windows."""
 
     def __init__(self, network_id_le, session_key, our_ip, our_mac, send, log=print,
-                 on_data=None, on_other=None, name="PkCamp", account=None, token=None,
+                 on_data=None, on_other=None, name="POKELDN", account=None, token=None,
                  session=None, capture=None, on_broadcast=None):
         self.network_id_le = bytes(network_id_le)
         self.session_key = bytes(session_key)
@@ -271,6 +271,8 @@ class Pia4Host:
         if fresh:
             self.record(rec="rx_data", src=st.ip, protocol=protocol, port=port,
                         seq=got["sequence_id"], payload=got["payload"].hex())
+            if protocol == mesh.PROTOCOL and mesh.parse_leave_request(got["payload"]) is not None:
+                self._leave(st)
             self.on_data(st, protocol, port, got["payload"])
 
     def on_packet(self, data, src_ip, now=None):
@@ -359,6 +361,22 @@ class Pia4Host:
             self.log(f"[pia4] {st.ip}: connection response result {body[1]}; sent ours")
         elif kind == station4.ACK:
             self.record(rec="rx_station_ack", src=st.ip, ack_id=station4.ack_id_of(body))
+        elif kind == station4.DISCONNECTION_REQUEST:
+            # Repeated every 0.5 s until answered, then the console leaves the LDN network.
+            self.send_message(st.ip, station4.build_disconnection_response(), stp.PROTOCOL)
+            if st.state != "left":
+                st.state = "left"
+                self.log(f"[pia4] {st.ip}: disconnection request; answered")
+
+    def _leave(self, st):
+        """LEAVE_REQUEST: answer as the version-4 host does (0x017c19a0) and drop the station from
+        the mesh. Unanswered, a Sword waits 5 s, then 3.6 s of disconnection requests
+        (docs/swsh_session.md, Leaving)."""
+        for _ in range(2):
+            self.send_message(st.ip, mesh.build_leave_response(0), mesh.PROTOCOL,
+                              destination=st.bitmap)
+        st.state = "left"
+        self.log(f"[pia4] {st.ip}: leave request; answered")
 
     def _join(self, st, body):
         self.send_message(st.ip, station4.build_ack(mesh.read_ack_id(body)), stp.PROTOCOL)

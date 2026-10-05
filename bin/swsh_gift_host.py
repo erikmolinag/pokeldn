@@ -4,7 +4,7 @@
 The gift screen scans and never joins: the card rides the 0x180-byte advertise data, one fragment
 per advertisement.
 
-    sudo ./bin/swsh_gift_host.py --species 25 --level 25 --nickname PKCAMP --ot POKELDN
+    sudo ./bin/swsh_gift_host.py --species 25 --level 25 --nickname POKELDN --ot POKELDN
     sudo ./bin/swsh_gift_host.py --record scratchpad/card.bin --dwell 0.5
 
     (them) Mystery Gift -> Recevoir un Cadeau Mystere -> Via communication sans fil locale
@@ -18,7 +18,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pokeldn import config, pokemon
+from pokeldn import config, gifts, pokemon
+from pokeldn.app import screen
 from pokeldn.host_support import write_file
 from pokeldn.ldn import transport
 from pokeldn.ldn.transport import HostTransport
@@ -42,11 +43,11 @@ def build_record(args):
 
 def _base_record(args):
     if args.record:
-        rec = Path(args.record).read_bytes()
-        if len(rec) != wc8.RECORD:
-            raise SystemExit(f"{args.record} is {len(rec)} bytes, not {wc8.RECORD}")
-        return rec
-    fields = {"ot_gender": 2}            # every card a console has taken carried 2 at +0x272
+        from pokeldn.swsh.gift_file import record
+        return record(gifts.load(args.record, game="swsh"))
+    from pokeldn.swsh.gift_builder import card_gender
+    fields = {"ot_gender": 2,            # every card a console has taken carried 2 at +0x272
+              "gender": card_gender(args.species, args.form)}
     for item in args.set or ():
         name, _, value = item.partition("=")
         if name not in wc8.POKEMON:
@@ -57,6 +58,17 @@ def _base_record(args):
         moves=(args.move1, args.move2, args.move3, args.move4),
         nickname=args.nickname, ot=args.ot, card_id=args.card_id,
         region_mask=args.region_mask, ribbons=args.ribbon or (), **fields)
+
+
+def show_card(args, record):
+    """The card on the board's screen: the gift file's name, or the Pokemon this run built, drawn
+    when the record carries one (kind 1)."""
+    off, fmt = wc8.POKEMON["species"]
+    species = (struct.unpack_from("<" + fmt, record, off)[0]
+               if record[wc8.GIFT_KIND_AT] == wc8.GIFT_KIND_POKEMON else None)
+    line = (gifts.load(args.record, game="swsh").name if args.record else
+            args.nickname or (f"Pokemon #{species}" if species else ""))
+    screen.gift("Mystery Gift", line, species=species)
 
 
 def validate(record, image):
@@ -76,7 +88,9 @@ def validate(record, image):
 def build_parser():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--record", help="a 720-byte record to send instead of building one")
+    p.add_argument("--record", "--gift-file", dest="record",
+                   help="a .pokegift or 720-byte .wc8 record to send instead of building one")
+    p.add_argument("--export-gift", metavar="FILE", help="save a .pokegift file and exit without using the radio")
     p.add_argument("--species", type=int, default=25)
     p.add_argument("--level", type=int, default=25, help="0 makes the game roll one")
     p.add_argument("--form", type=int, default=0)
@@ -101,7 +115,7 @@ def build_parser():
     p.add_argument("--seconds", type=float, default=300)
     p.add_argument("--channel", type=int, default=None)
     p.add_argument("--phy", default="auto", help="the phy renumbers on every driver reload")
-    p.add_argument("--nickname-host", default="PkCamp", help="the network's own name")
+    p.add_argument("--nickname-host", default="POKELDN", help="the network's own name")
     p.add_argument("--keys", default=None, help="prod.keys; default from config/host.toml")
     p.add_argument("--scene-id", type=int, default=SCENE_ID)
     p.add_argument("--app-version", type=int, default=APP_VERSION)
@@ -121,9 +135,20 @@ def main(argv=None):
     try:
         record = build_record(args)
         pokemon.SERVICE.validate_gift(record)
-    except (pokemon.BuilderError, ValueError, struct.error) as exc:
+    except (OSError, pokemon.BuilderError, ValueError, struct.error) as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    if args.export_gift:
+        from pokeldn.swsh.gift_file import from_record
+        try:
+            gift = (gifts.load(args.record, game="swsh") if args.record and not args.patch else
+                    from_record(record, name=args.nickname or "Sword/Shield gift"))
+            gifts.save(args.export_gift, gift)
+        except (OSError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(f"Saved {args.export_gift}: {gift.summary}")
+        return 0
     fragments = beacon.build_message(record)
     print(f"record {len(record)} bytes, checksum {wc8.record_crc(record):#06x}, "
           f"{len(fragments)} fragments")
@@ -154,6 +179,7 @@ def main(argv=None):
     host = make_host(args, fragments, os.path.expanduser(args.keys or machine.keys_path), phy,
                      machine)
     host.start()  # raises when the AP does not come up
+    show_card(args, record)
     print(f"advertising comm id {COMM_ID:#018x}, scene {args.scene_id}, protocol {args.protocol}, "
           f"walking {len(fragments)} fragments every {args.dwell}s")
     i = 0

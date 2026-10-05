@@ -13,10 +13,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from pokeldn import __version__
+from gui.flet_client import CLIENT, MARKER, platform_key
 
 FIRMWARE = ROOT / "gui" / "firmware" / "pokeldn-radio.bin"
 FIRMWARE_S3 = ROOT / "gui" / "firmware" / "pokeldn-radio-s3.bin"
 FIRMWARE_C3 = ROOT / "gui" / "firmware" / "pokeldn-radio-c3.bin"
+FIRMWARE_C6 = ROOT / "gui" / "firmware" / "pokeldn-radio-c6.bin"
 APP_ID = "io.github.decryptu.pokeldn"
 
 
@@ -33,7 +35,7 @@ def runtime_files() -> list[str]:
 
 
 def platform_excludes():
-    excluded = ["pytest", "unicorn", "PyInstaller", "flet_cli", "pip", "setuptools",
+    excluded = ["pytest", "PyInstaller", "flet_cli", "pip", "setuptools",
                 "pycparser.lextab", "pycparser.yacctab"]
     if sys.platform != "win32":
         excluded += ["serial.tools.list_ports_windows", "serial.serialwin32", "serial.win32",
@@ -45,12 +47,31 @@ def platform_excludes():
     return excluded
 
 
+def clear_cfg(exe: Path) -> None:
+    """PyInstaller's Windows bootloader enables Control Flow Guard; Unicorn faults in a CFG process
+    (unicorn-engine/unicorn#2281), python.exe has it off. Clear GUARD_CF in DllCharacteristics."""
+    with exe.open("r+b") as f:
+        f.seek(0x3C)
+        pe = int.from_bytes(f.read(4), "little")
+        f.seek(pe)
+        assert f.read(4) == b"PE\0\0", exe
+        field = pe + 24 + 70
+        f.seek(field)
+        flags = int.from_bytes(f.read(2), "little")
+        f.seek(field)
+        f.write((flags & ~0x4000).to_bytes(2, "little"))
+
+
 def main() -> int:
-    firmware = (FIRMWARE, FIRMWARE_S3, FIRMWARE_C3)
+    firmware = (FIRMWARE, FIRMWARE_S3, FIRMWARE_C3, FIRMWARE_C6)
     missing = [str(path) for path in firmware if not path.is_file()]
     if missing:
-        raise SystemExit(f"Missing firmware: {', '.join(missing)}. Build all three images "
+        raise SystemExit(f"Missing firmware: {', '.join(missing)}. Build all four images "
                          "as described in docs/gui.md before packing.")
+    client = CLIENT / platform_key()
+    if not (client / MARKER).is_file():
+        raise SystemExit("Missing the Flet client that takes file drops. Build it with "
+                         "python scripts/build_client.py (needs Flutter) before packing.")
     if importlib.util.find_spec("PyInstaller") is None:
         raise SystemExit("Install desktop build dependencies: python -m pip install -r gui/requirements.txt")
     service = ROOT / "services" / "pkhex"
@@ -80,6 +101,10 @@ def main() -> int:
         data += [(stage / "gui/guide.md", "gui"), (executable, "services/pkhex/dist")]
         data += [(stage / "LICENSE", "."), (stage / "vendor/LDN/LICENSE", "vendor/LDN")]
         data += [(path, "gui/firmware") for path in firmware]
+        # PyInstaller's library patterns miss Linux's libunicorn.so.2; unicorn looks in its own lib/.
+        import unicorn
+        data += [(path, "unicorn/lib") for path in (Path(unicorn.__file__).parent / "lib").iterdir()
+                 if path.suffix in (".dll", ".dylib") or ".so" in path.suffixes]
         args = [sys.executable, str(ROOT / "scripts/pack_flet.py"), "pack", str(ROOT / "gui" / "main.py"),
                 "--name", "pokeldn", "-y",
                 "--distpath", str(ROOT / "dist"), "--product-name", "pokeldn",
@@ -93,11 +118,11 @@ def main() -> int:
         for option in (f"--paths={dependencies}", f"--paths={ROOT}", f"--paths={ROOT / 'bin'}", f"--paths={ROOT / 'vendor' / 'LDN'}",
                        *console,
                        *[f"--hidden-import={s}" for s in scripts],
-                       *[f"--exclude-module={m}" for m in platform_excludes()], "--collect-all=esptool",
+                       *[f"--exclude-module={m}" for m in platform_excludes()], "--collect-all=esptool", "--collect-submodules=unicorn",
                        "--collect-all=esp_pylib", "--collect-submodules=pokeldn",
                        "--collect-submodules=ldn"):
             args.append(f"--pyinstaller-build-args={option}")
-        result = subprocess.run(args, cwd=stage).returncode
+        result = subprocess.run(args, cwd=stage, env=dict(os.environ, FLET_VIEW_PATH=str(client))).returncode
         expected = ROOT / "dist" / ({"darwin": "pokeldn.app", "win32": "pokeldn.exe"}.get(sys.platform, "pokeldn"))
         if result == 0 and not expected.exists():
             raise SystemExit("The packer produced no desktop application.")
@@ -109,6 +134,8 @@ def main() -> int:
             with info_path.open("wb") as dest:
                 plistlib.dump(info, dest)
             subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(expected)], check=True)
+        if result == 0 and sys.platform == "win32":
+            clear_cfg(expected)
         if result == 0 and sys.platform.startswith("linux"):
             (ROOT / "dist" / f"{APP_ID}.desktop").unlink(missing_ok=True)
         return result

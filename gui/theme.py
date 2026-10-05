@@ -3,28 +3,29 @@ import flet.canvas as cv
 
 from gui.icons import icon as pixel_icon
 
-BG = "#08090B"
-PANEL = "#111317"
-CARD = "#181A1F"
-FIELD = "#24272E"
-HOVER = "#30343D"
-OUTLINE = "#202329"
-BORDER = "#2D3139"
-EDGE = "#3A404B"
-DIVIDER = "#22262D"
-TEXT = "#ECEDEF"
-MUTED = "#9A9FAA"
-FAINT = "#737986"
+BG = "#0B0B0D"
+PANEL = "#1C1C1F"
+CARD = "#161618"
+FIELD = "#232326"
+HOVER = "#2C2C30"
+OUTLINE = "#262629"
+BORDER = "#2E2E32"
+EDGE = "#3A3A3F"
+DIVIDER = "#252528"
+TEXT = "#F5F5F7"
+SOFT = "#D1D1D6"
+MUTED = "#A1A1A6"
+FAINT = "#86868B"
 BLUE = "#47AEFA"
-BLUE_DEEP = "#3979EE"
 RED = "#FD474D"
-RED_DEEP = "#D93B56"
 GREEN = "#3DD68C"
+AMBER = "#FF9F0A"
+SELECTED = ft.Colors.with_opacity(0.14, BLUE)
 MONO = "monospace"
-CONTROL_HEIGHT = 38
+CONTROL_HEIGHT = 34
 CONTROL_PADDING = ft.Padding(12, 8, 12, 8)
-CONTROL_RADIUS = 9
-GAP = 16
+CONTROL_RADIUS = 8
+GAP = 12
 SIDEBAR_WIDTH = 254
 SESSION_WIDTH = 360
 
@@ -32,13 +33,14 @@ SESSION_WIDTH = 360
 def app_theme() -> ft.Theme:
     return ft.Theme(
         color_scheme_seed=BLUE,
-        color_scheme=ft.ColorScheme(primary=BLUE, secondary=RED, surface=PANEL, on_surface=TEXT,
+        color_scheme=ft.ColorScheme(primary=BLUE, secondary=BLUE, surface=PANEL, on_surface=TEXT,
                                     error=RED, outline=BORDER, surface_container_highest=FIELD),
         divider_color=DIVIDER,
         card_theme=ft.CardTheme(margin=0),
-        scrollbar_theme=ft.ScrollbarTheme(thickness=6, radius=3, thumb_color=HOVER),
-        tooltip_theme=ft.TooltipTheme(decoration=ft.BoxDecoration(bgcolor=FIELD, border_radius=6),
-                                     text_style=ft.TextStyle(color=TEXT, size=12)),
+        scrollbar_theme=ft.ScrollbarTheme(thickness=6, radius=3,
+                                          thumb_color=ft.Colors.with_opacity(0.2, "#FFFFFF")),
+        tooltip_theme=ft.TooltipTheme(decoration=ft.BoxDecoration(bgcolor=HOVER, border_radius=8),
+                                      text_style=ft.TextStyle(color=TEXT, size=12)),
     )
 
 
@@ -48,62 +50,91 @@ def text(value: str, size: float = 13, color: str = TEXT, weight=None, **kwargs)
 
 
 def backdrop(content: ft.Control) -> ft.Container:
-    """The window behind the panels: a dim checkerboard."""
+    """The window behind the glass: a dim checkerboard."""
     return ft.Container(content, expand=True, bgcolor=BG, padding=GAP,
                         image=ft.DecorationImage(src="grid.png", repeat=ft.ImageRepeat.REPEAT, scale=2,
                                                  alignment=ft.Alignment.TOP_LEFT))
 
 
-def surface(content: ft.Control, *, bgcolor: str = CARD, stroke: str = BORDER,
-            radius: float = 24, elevation: float = 0, **kwargs) -> ft.Card:
-    return ft.Card(content, bgcolor=bgcolor, elevation=elevation, shadow_color="#000000",
-                   shape=ft.ContinuousRectangleBorder(radius=radius, side=ft.BorderSide(1, stroke)),
-                   clip_behavior=ft.ClipBehavior.ANTI_ALIAS, semantic_container=False, **kwargs)
+def glass(content: ft.Control, radius: float = 20, **kwargs) -> ft.Container:
+    """Liquid Glass: the layer of navigation and controls that floats above the content, never the content itself."""
+    # One colour on all four sides: Flutter leaves the corners of a mixed-colour border square.
+    return ft.Container(
+        content, blur=ft.Blur(30, 30), border_radius=radius, clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+        gradient=ft.LinearGradient(begin=ft.Alignment.TOP_CENTER, end=ft.Alignment.BOTTOM_CENTER,
+                                   colors=[ft.Colors.with_opacity(0.72, "#26262A"),
+                                           ft.Colors.with_opacity(0.64, "#18181B")]),
+        border=ft.Border.all(1, ft.Colors.with_opacity(0.1, "#FFFFFF")),
+        **kwargs)
 
 
-def panel(content: ft.Control, width: float | None = None, expand=None, padding=0) -> ft.Card:
-    return surface(ft.Container(content, padding=padding), width=width, expand=expand,
-                   bgcolor=PANEL, stroke=OUTLINE, radius=30, elevation=8)
+def surface(content: ft.Control, *, bgcolor: str = CARD, radius: float = 14, **kwargs) -> ft.Container:
+    """A solid surface in the content layer."""
+    return ft.Container(content, bgcolor=bgcolor, border_radius=radius, **kwargs)
+
+
+def panel(content: ft.Control, width: float | None = None, expand=None, padding=0) -> ft.Container:
+    return glass(ft.Container(content, padding=padding), width=width, expand=expand)
+
+
+TOOLBAR_ITEM = 32   # the icon buttons are this size
+TOOLBAR_INSET = 4
 
 
 def notch(*controls: ft.Control) -> ft.Row:
-    """A small floating toolbar centred over the canvas; its groups are split by hairlines."""
+    """A small glass toolbar centred over the content; its groups are split by hairlines.
+    Its corners are concentric with its items': outer radius = item radius + the even inset."""
     items: list[ft.Control] = []
     for control in controls:
         if items:
-            items.append(ft.Container(width=1, height=20, bgcolor=EDGE))
+            items.append(ft.Container(width=1, height=18, bgcolor=ft.Colors.with_opacity(0.12, "#FFFFFF")))
         items.append(control)
-    return ft.Row([surface(ft.Container(ft.Row(items, spacing=12, tight=True),
-                                       padding=ft.Padding(10, 7, 8, 7)),
-                           bgcolor=PANEL, stroke=OUTLINE, radius=26, elevation=8)],
+    row = ft.Row(items, spacing=8, tight=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+    return ft.Row([glass(ft.Container(row, padding=TOOLBAR_INSET), radius=TOOLBAR_ITEM / 2 + TOOLBAR_INSET)],
                   alignment=ft.MainAxisAlignment.CENTER)
 
 
 def panel_header(title: str, *actions: ft.Control) -> ft.Container:
     return ft.Container(
-        ft.Row([text(title, 15, weight=ft.FontWeight.W_600), ft.Row(list(actions), spacing=4)],
-               alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-        padding=ft.Padding(18, 16, 14, 16), border=ft.Border(bottom=ft.BorderSide(1, DIVIDER)))
+        ft.Row([text(title, 15, weight=ft.FontWeight.W_600), ft.Row(list(actions), spacing=2)],
+               alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+        padding=ft.Padding(18, 14, 12, 6), height=52)
+
+
+def section(title: str, body: ft.Control | None = None, trailing: ft.Control | None = None) -> ft.Column:
+    """A titled group inside a glass panel: the spacing separates it, no box."""
+    head: list[ft.Control] = [text(title, 12, MUTED, weight=ft.FontWeight.W_600, expand=True)]
+    if trailing:
+        head.append(trailing)
+    return ft.Column([ft.Row(head, spacing=8), *([body] if body else [])], spacing=8, tight=True)
 
 
 def card(title: str, body: ft.Control | None = None, description: str = "",
-         trailing: ft.Control | None = None, tip: str = "") -> ft.Card:
-    head = [text(title, 14, weight=ft.FontWeight.W_600, expand=True)]
+         trailing: ft.Control | None = None, tip: str = "") -> ft.Container:
+    head = [text(title, 13, weight=ft.FontWeight.W_600, expand=True)]
     if tip:
         head.append(pixel_icon("circle-info", color=FAINT, tooltip=tip))
     if trailing:
         head.append(trailing)
-    rows: list[ft.Control] = [ft.Row(head, spacing=8)]
+    rows: list[ft.Control] = [ft.Row(head, spacing=8, vertical_alignment=ft.CrossAxisAlignment.CENTER)]
     if description:
         rows.append(text(description, 12, MUTED))
     if body:
         rows.append(body)
-    return surface(ft.Container(ft.Column(rows, spacing=12, tight=True), padding=16))
+    return surface(ft.Container(ft.Column(rows, spacing=10, tight=True), padding=16))
+
+
+def dialog(**kwargs) -> ft.AlertDialog:
+    return ft.AlertDialog(bgcolor=PANEL, elevation=24,
+                          shape=ft.RoundedRectangleBorder(
+                              radius=20, side=ft.BorderSide(1, ft.Colors.with_opacity(0.08, "#FFFFFF"))),
+                          barrier_color=ft.Colors.with_opacity(0.6, "#000000"), **kwargs)
 
 
 def _border() -> dict:
-    flat = ft.OutlineInputBorder(border_radius=CONTROL_RADIUS, side=ft.BorderSide(1, BORDER))
-    return {ft.ControlState.FOCUSED: ft.OutlineInputBorder(border_radius=CONTROL_RADIUS, side=ft.BorderSide(1, BLUE)),
+    flat = ft.OutlineInputBorder(border_radius=CONTROL_RADIUS, side=ft.BorderSide(1, ft.Colors.TRANSPARENT))
+    return {ft.ControlState.FOCUSED: ft.OutlineInputBorder(border_radius=CONTROL_RADIUS,
+                                                           side=ft.BorderSide(1.5, BLUE)),
             ft.ControlState.DISABLED: flat, ft.ControlState.DEFAULT: flat}
 
 
@@ -122,12 +153,13 @@ def field(label: str = "", value: str = "", hint: str = "", mono: bool = False, 
         kwargs.setdefault("height", CONTROL_HEIGHT)
         kwargs.setdefault("fit_parent_size", True)
     kwargs.setdefault("size_constraints", ft.BoxConstraints(min_height=CONTROL_HEIGHT))
+    kwargs.setdefault("content_padding", CONTROL_PADDING)
     control = _Field if uniform else ft.TextField
     return control(value=value, label=label or None, hint_text=hint or None, text_style=style,
                    label_style=ft.TextStyle(size=12, color=MUTED), dense=True,
                    hint_style=ft.TextStyle(size=13, color=FAINT), bgcolor=FIELD, filled=True,
                    border=_border(), cursor_color=BLUE,
-                   content_padding=CONTROL_PADDING, text_vertical_align=ft.VerticalAlignment.CENTER, **kwargs)
+                   text_vertical_align=ft.VerticalAlignment.CENTER, **kwargs)
 
 
 def dropdown(options: list[tuple[str, str]], value: str | None, on_select=None, **kwargs) -> ft.Dropdown:
@@ -136,73 +168,68 @@ def dropdown(options: list[tuple[str, str]], value: str | None, on_select=None, 
                        text_size=13, expand=True, height=CONTROL_HEIGHT, content_padding=CONTROL_PADDING,
                        trailing_icon=pixel_icon("chevron-down", color=MUTED),
                        selected_trailing_icon=pixel_icon("chevron-up", color=BLUE),
-                       menu_style=ft.MenuStyle(bgcolor=FIELD), **kwargs)
+                       menu_style=ft.MenuStyle(bgcolor=PANEL, shape=ft.RoundedRectangleBorder(radius=10)),
+                       **kwargs)
 
 
 def labeled_control(label: str, control: ft.Control, **kwargs) -> ft.Column:
     return ft.Column([ft.Container(text(label, 11, MUTED), height=16,
-                                  alignment=ft.Alignment.CENTER_LEFT), control],
+                                   alignment=ft.Alignment.CENTER_LEFT), control],
                      spacing=4, tight=True, **kwargs)
 
 
-class _Button(ft.Container):
+class _Button(ft.Button):
     def before_update(self):
         super().before_update()
-        self.content.disabled = self.disabled
-        if isinstance(self.content.icon, ft.Image):
-            colors = self.content.style.color
-            self.content.icon.color = colors[ft.ControlState.DISABLED if self.disabled else ft.ControlState.DEFAULT]
-        self.gradient = None if self.disabled else self.data
+        if isinstance(self.icon, ft.Image):   # a pixel icon is an image: it takes the label's colour by hand
+            colors = self.style.color
+            self.icon.color = colors[ft.ControlState.DISABLED if self.disabled else ft.ControlState.DEFAULT]
 
 
 def button(label: str, on_click=None, icon=None, color: str = BLUE, filled: bool = True,
-           **kwargs) -> ft.Container:
-    top, bottom, edge = {BLUE: ("#50B2FB", "#42A7F1", "#67BDF9"),
-                         RED: ("#FD5258", "#F3444B", "#FD6870")}.get(color, (color, color, color))
-    gradient = ft.LinearGradient(begin=ft.Alignment.TOP_CENTER, end=ft.Alignment.BOTTOM_CENTER,
-                                 colors=[top, bottom]) if filled else None
-    stroke = edge if filled else EDGE
+           **kwargs) -> ft.Button:
+    """A capsule. Filled carries the colour and is the one likely action in a view; the rest are not filled."""
+    ink = BG if filled else TEXT
     style = ft.ButtonStyle(
-        bgcolor={ft.ControlState.DISABLED: FIELD,
-                 ft.ControlState.DEFAULT: ft.Colors.TRANSPARENT if filled else FIELD},
-        color={ft.ControlState.DISABLED: FAINT, ft.ControlState.DEFAULT: BG if filled else TEXT},
-        shape=ft.RoundedRectangleBorder(radius=CONTROL_RADIUS), padding=CONTROL_PADDING,
-        side={ft.ControlState.DISABLED: ft.BorderSide(1, FIELD),
-              ft.ControlState.DEFAULT: ft.BorderSide(1, stroke),
-              ft.ControlState.FOCUSED: ft.BorderSide(2, TEXT)},
+        bgcolor={ft.ControlState.DISABLED: ft.Colors.with_opacity(0.05, "#FFFFFF"),
+                 ft.ControlState.DEFAULT: color if filled else ft.Colors.with_opacity(0.09, "#FFFFFF")},
+        color={ft.ControlState.DISABLED: FAINT, ft.ControlState.DEFAULT: ink},
+        shape=ft.StadiumBorder(), padding=ft.Padding(16, 8, 16, 8),
+        side={ft.ControlState.FOCUSED: ft.BorderSide(2, ft.Colors.with_opacity(0.6, BLUE)),
+              ft.ControlState.DEFAULT: ft.BorderSide(0, ft.Colors.TRANSPARENT)},
         text_style=ft.TextStyle(size=13, weight=ft.FontWeight.W_500),
         overlay_color={ft.ControlState.DEFAULT: ft.Colors.TRANSPARENT,
-                       ft.ControlState.HOVERED: ft.Colors.with_opacity(0.06, "#FFFFFF"),
-                       ft.ControlState.PRESSED: ft.Colors.with_opacity(0.12, "#000000")},
+                       ft.ControlState.HOVERED: ft.Colors.with_opacity(0.08, "#FFFFFF"),
+                       ft.ControlState.PRESSED: ft.Colors.with_opacity(0.14, "#000000")},
         elevation=0, shadow_color=ft.Colors.TRANSPARENT)
-    icon_color = BG if filled else TEXT
     kwargs.setdefault("height", CONTROL_HEIGHT)
-    return _Button(ft.Button(label, icon=pixel_icon(icon, color=icon_color) if icon else None,
-                             on_click=on_click, style=style, elevation=0, height=kwargs["height"]),
-                   border_radius=CONTROL_RADIUS,
-                   gradient=None if kwargs.get("disabled") else gradient,
-                   data=gradient, **kwargs)
+    return _Button(label, icon=pixel_icon(icon, color=ink) if icon else None, on_click=on_click,
+                   style=style, elevation=0, **kwargs)
 
 
-def secondary_button(label: str, on_click=None, icon=None, **kwargs) -> ft.Container:
+def secondary_button(label: str, on_click=None, icon=None, **kwargs) -> ft.Button:
     return button(label, on_click, icon, filled=False, **kwargs)
 
 
 def link_button(label: str, on_click=None) -> ft.TextButton:
     return ft.TextButton(label, on_click=on_click, height=CONTROL_HEIGHT,
-                         style=ft.ButtonStyle(color=BLUE, padding=CONTROL_PADDING))
+                         style=ft.ButtonStyle(color=BLUE, padding=ft.Padding(10, 6, 10, 6),
+                                              shape=ft.StadiumBorder(),
+                                              overlay_color=ft.Colors.with_opacity(0.08, BLUE)))
 
 
 def icon_button(icon, on_click=None, tooltip: str = "", color: str = MUTED, **kwargs) -> ft.IconButton:
     return ft.IconButton(pixel_icon(icon, color=color), tooltip=tooltip or None,
                          on_click=on_click, width=32, height=32,
-                         style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8)),
+                         style=ft.ButtonStyle(shape=ft.CircleBorder(),
+                                              overlay_color=ft.Colors.with_opacity(0.08, "#FFFFFF")),
                          **kwargs)
 
 
 def switch(value: bool, on_change) -> ft.Switch:
     return ft.Switch(value=value, height=CONTROL_HEIGHT, padding=0,
-                     active_color=BLUE, inactive_thumb_color=MUTED, inactive_track_color=HOVER,
+                     active_color="#FFFFFF", active_track_color=BLUE,
+                     inactive_thumb_color="#FFFFFF", inactive_track_color="#3A3A3C",
                      track_outline_color={ft.ControlState.DEFAULT: ft.Colors.TRANSPARENT},
                      overlay_color={ft.ControlState.DEFAULT: ft.Colors.TRANSPARENT,
                                     ft.ControlState.HOVERED: ft.Colors.TRANSPARENT,
@@ -213,13 +240,13 @@ def switch(value: bool, on_change) -> ft.Switch:
 
 
 def badge(label: str, color: str = MUTED, icon: str = "circle-info") -> ft.Row:
-    return ft.Row([pixel_icon(icon, size=12, color=color), text(label, 12)],
+    return ft.Row([pixel_icon(icon, size=12, color=color), text(label, 12, SOFT)],
                   spacing=6, tight=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
 
-def segmented(options: list[tuple[str, str, str]], value: str, on_change) -> ft.Container:
-    """The small pill switcher (Basic / All options)."""
-    row = ft.Row(spacing=2, tight=True)
+def segmented(options: list[tuple[str, str, str]], value: str, on_change) -> ft.Row:
+    """The capsule switcher (Basic / Advanced); it sits on the glass toolbar."""
+    row = ft.Row(spacing=0, tight=True)
 
     def render(selected):
         row.controls = [
@@ -227,9 +254,9 @@ def segmented(options: list[tuple[str, str, str]], value: str, on_change) -> ft.
                 pixel_icon(icon, color=BLUE if key == selected else FAINT),
                 text(label, 12, TEXT if key == selected else MUTED, weight=ft.FontWeight.W_600),
             ], spacing=6, tight=True),
-                padding=ft.Padding(12, 6, 14, 6), border_radius=8,
-                bgcolor=HOVER if key == selected else None,
-                border=ft.Border.all(1, EDGE if key == selected else ft.Colors.TRANSPARENT),
+                height=TOOLBAR_ITEM, padding=ft.Padding(12, 0, 14, 0), border_radius=TOOLBAR_ITEM / 2,
+                alignment=ft.Alignment.CENTER,
+                bgcolor=ft.Colors.with_opacity(0.14, "#FFFFFF") if key == selected else None,
                 on_click=lambda e, k=key: pick(k))
             for key, label, icon in options]
 
@@ -239,7 +266,46 @@ def segmented(options: list[tuple[str, str, str]], value: str, on_change) -> ft.
         on_change(key)
 
     render(value)
-    return ft.Container(row, bgcolor=BG, border_radius=11, padding=3)
+    return row
+
+
+def fade(scrollable: ft.ScrollableControl, size: float = 24) -> ft.ShaderMask:
+    """The scrollable, its top and bottom edges fading out over size px while content lies beyond them."""
+    edges = {"height": 0.0, "top": False, "bottom": not getattr(scrollable, "auto_scroll", False)}
+    mask = ft.ShaderMask(content=scrollable, blend_mode=ft.BlendMode.DST_IN, expand=scrollable.expand,
+                         shader=ft.LinearGradient(colors=["#FFFFFFFF", "#FFFFFFFF"]))
+
+    def paint() -> bool:
+        stop = min(size / edges["height"], 0.5) if edges["height"] else 0.0
+        clear, solid = "#00FFFFFF", "#FFFFFFFF"
+        shader = ft.LinearGradient(begin=ft.Alignment.TOP_CENTER, end=ft.Alignment.BOTTOM_CENTER,
+                                   colors=[clear if edges["top"] else solid, solid, solid,
+                                           clear if edges["bottom"] else solid],
+                                   stops=[0, stop, 1 - stop, 1])
+        changed = shader != mask.shader
+        mask.shader = shader
+        return changed
+
+    def resized(e) -> None:
+        edges["height"] = e.height
+        if paint():
+            mask.update()
+
+    previous = scrollable.on_scroll
+
+    def scrolled(e) -> None:
+        top, bottom = e.pixels > e.min_scroll_extent + 1, e.pixels < e.max_scroll_extent - 1
+        if (top, bottom) != (edges["top"], edges["bottom"]):
+            edges["top"], edges["bottom"] = top, bottom
+            if paint():
+                mask.update()
+        if previous:
+            previous(e)
+
+    scrollable.on_scroll = scrolled
+    mask.on_size_change = resized
+    paint()
+    return mask
 
 
 def step_list(steps: list[str]) -> ft.Column:

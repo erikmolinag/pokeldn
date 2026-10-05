@@ -1,19 +1,22 @@
-# pokeldn 0.2.2
+# pokeldn 0.8.1
 
 This desktop app trades with seven Pokemon game families on a Switch or Switch 2
 through an ESP32 radio connected by USB. Nothing is installed on the console.
 
 ## What is new
 
-- Evolved Pokemon build legally far more often. An evolved species takes the ability of its own
-  species, a trade evolution (Alakazam, Politoed, Scizor and similar) receives a second handling
-  trainer, and evolutions that count something (Sirfetch'd, Runerigus, Annihilape, Gholdengo) start
-  from that count. Plain builds that failed fall from 48 to 7 in Brilliant Diamond and Shining Pearl,
-  from 7 to 0 in Let's Go and from 4 to 0 in Legends Arceus.
-- A build no longer fails at random. A wild encounter's level and personality are rolled at random, and
-  about one build in ten of a chosen level was refused; each encounter now gets several rolls.
-- A level below the lowest one a game offers says so, for example "Mewtwo cannot be lower than level
-  100 in this game".
+- Save gift file also writes native files: a FireRed/LeafGreen gift as `.wc3` and a Sword/Shield
+  gift as `.wc8`, chosen by the file name's extension. `--export-gift FILE.wc3` does the same from
+  the command line. A `.wc3` holds a Wonder Card and its delivery script; gifts with stamps,
+  visiting trainers, Mystery Event scripts or Wonder News stay `.pokegift`.
+
+Everything from 0.8.0 is included: the official FireRed/LeafGreen distribution eggs and event
+Pokemon, the GB-Link Team's custom cards, and Sword/Shield outfits, money and Gigantamax Pokemon.
+
+The firmware is unchanged (1.4.0); a board flashed by 0.7.0 or later needs no reflash.
+
+pokeldn is an unofficial fan project, not affiliated with Nintendo or The Pokemon Company. It is not
+meant for commercial or promotional use; see the License section of the README.
 
 ## Downloads
 
@@ -23,20 +26,23 @@ through an ESP32 radio connected by USB. Nothing is installed on the console.
 | Windows, x64 | `pokeldn-windows-x64.exe` |
 | Linux, x64 | `pokeldn-linux-x64.tar.gz` |
 
-Each app includes PKHeX.Core and firmware for classic ESP32, ESP32-S3 and ESP32-C3. Python, .NET
+Each app includes PKHeX.Core and firmware for classic ESP32, ESP32-S3, ESP32-C3 and ESP32-C6. Python, .NET
 and ESP-IDF are bundled or unnecessary for running the app. Supply your own `prod.keys`.
 The separate `pokeldn-radio*.bin` files are merged firmware images for manual flashing at address
-`0x0`; the app selects the right image for the connected chip. `SHA256SUMS` covers all six downloads.
+`0x0`; the app selects the right image for the connected chip. `SHA256SUMS` covers all seven downloads.
 
 ## First run
 
-1. Extract the macOS or Linux archive, or launch the Windows executable. On macOS, the app is
-   unsigned; use right-click, Open for the first launch.
+1. Extract the macOS or Linux archive, or launch the Windows executable.
+   - macOS: the app is unsigned, so the first launch is blocked. Open it once and close the warning,
+     then open System Settings, Privacy & Security, scroll down to Security and press Open Anyway next
+     to pokeldn, then confirm with your password. Later launches open normally.
+   - Windows: if SmartScreen stops the app, choose More info, then Run anyway.
 2. Choose `prod.keys` when prompted.
-3. Connect one supported board with a USB data cable. S3 and C3 boards use native USB Serial/JTAG.
+3. Connect one supported board with a USB data cable. S3, C3 and C6 boards use native USB Serial/JTAG.
    A board that ships an external antenna, such as the Seeed Studio XIAO ESP32C3 or XIAO ESP32S3,
    needs it attached; larger S3 boards such as the N8R2 and N16R8 have an onboard antenna.
-4. On Board, select the port, press Flash, then Identify.
+4. On Board, press Flash. The app checks the board on its own and shows Board ready.
 5. On Games, choose a game and a tool, build an offer or select a Pokemon file, and follow the
    console instructions before starting.
 
@@ -51,9 +57,9 @@ Received Pokemon are saved in `Documents/pokeldn/Received`, with a configurable 
 
 ## Platform notes
 
-macOS requires Apple silicon. Linux requires GTK 3, libsecret and access
+macOS requires Apple silicon and macOS 12 or later. Linux requires GTK 3, libsecret and access
 to the serial port; on distributions using the `dialout` group, run `sudo usermod -aG dialout "$USER"`
-and log out and back in. ESP32-S2 and ESP32-C6 are unsupported.
+and log out and back in. ESP32-S2 is unsupported.
 
 [Setup and protocol documentation](https://decryptu.github.io/pokeldn/) contains the per-game
 requirements. Attach the latest session recording from Settings to an

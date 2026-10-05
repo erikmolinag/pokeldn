@@ -204,6 +204,34 @@ def test_a_reader_held_silent_is_waited_for_not_overrun():
     assert (board.overflowed, radio.flow_resyncs, board.frames) == (0, 0, 600)
 
 
+def test_a_hello_mid_session_does_not_open_the_window():
+    """A HELLO sent with ETH_TX queued behind it, to a reader held as it arrives, overran the 16 KB
+    ring by 76423 bytes when the host dropped flow control until the board's CREDIT 0."""
+    frame = b"\xff" * 6 + bytes(6) + b"\x08\x00" + bytes(range(200))
+    length = len(esp32.encode_frame(esp32.CMD_ETH_TX, frame))
+    board = _RingBoard(holds=[(400 * length - 50, 0.5)])
+    radio = esp32.Radio(board)
+    try:
+        radio.send(esp32.CMD_HELLO)
+        time.sleep(0.1)
+        for i in range(400):
+            radio.send_ethernet(frame)
+            if i % 200 == 199:
+                assert radio.drain(30)
+        radio.send(esp32.CMD_HELLO)
+        for _ in range(400):
+            radio.send_ethernet(frame)
+        assert radio.drain(30)
+        deadline = time.monotonic() + 10
+        while board.ring and time.monotonic() < deadline:
+            time.sleep(0.01)
+        time.sleep(0.3)
+    finally:
+        radio.close()
+        board.close()
+    assert (board.overflowed, board.frames) == (0, 800)
+
+
 def test_radio_commands_against_the_simulated_board():
     board = esp32_sim.SimulatedBoard(esp32_sim.Air())
     radio = esp32.Radio(board.host_stream())
@@ -225,9 +253,10 @@ _radio = contextvars.ContextVar("radio")
 
 
 @contextlib.contextmanager
-def _two_boards():
+def _two_boards(refuse_joins=0):
     air = esp32_sim.Air()
     host_board, station_board = esp32_sim.SimulatedBoard(air), esp32_sim.SimulatedBoard(air)
+    station_board.refuse_joins = refuse_joins
     radios = esp32.Radio(host_board.host_stream()), esp32.Radio(station_board.host_stream())
     ports = {}
 
@@ -269,7 +298,7 @@ def test_the_lets_go_host_finds_the_channel_a_console_searches_on(console_scene,
                 _radio.set(console_radio)
                 param = ldn.CreateNetworkParam(
                     keys=KEYS, channel=11, local_communication_id=COMM_ID_PIKACHU,
-                    scene_id=console_scene, name=b"GURVAN", app_version=0)
+                    scene_id=console_scene, name=b"POKELDN", app_version=0)
                 async with ldn.create_network(param):
                     up.set()
                     while not result:
@@ -295,9 +324,12 @@ def _udp_frame(target: bytes, source: bytes, payload: bytes) -> bytes:
     return target + source + b"\x08\x00" + ip + struct.pack(">HHHH", 12345, 12345, 8 + len(payload), 0) + payload
 
 
-def test_ldn_host_and_station_run_on_simulated_boards():
+# A retail Sword's network refused a board's join with 0xc9 or 0x2 while still advertising; the
+# next STA_JOIN was taken (docs/hardware_esp32.md, Joining).
+@pytest.mark.parametrize("refused", [0, 2])
+def test_ldn_host_and_station_run_on_simulated_boards(refused):
     async def main():
-        with _two_boards() as ((host_radio, station_radio), ports, host_board):
+        with _two_boards(refused) as ((host_radio, station_radio), ports, host_board):
             host_up = trio.Event()
             joined = []
             received = []
@@ -306,7 +338,7 @@ def test_ldn_host_and_station_run_on_simulated_boards():
                 _radio.set(host_radio)
                 param = ldn.CreateNetworkParam(
                     keys=KEYS, channel=6, local_communication_id=0x0100ABCD00000000,
-                    name=b"PkCamp", app_version=1, application_data=b"esp32 test")
+                    name=b"POKELDN", app_version=1, application_data=b"esp32 test")
                 async with ldn.create_network(param) as network:
                     host_up.set()
                     event = await network.next_event()
@@ -370,7 +402,7 @@ def test_userspace_stack_carries_udp_both_ways_on_simulated_boards():
             _radio.set(radios[0])
             param = ldn.CreateNetworkParam(
                 keys=KEYS, channel=6, local_communication_id=0x0100ABCD00000000,
-                name=b"PkCamp", app_version=1, application_data=b"esp32 test")
+                name=b"POKELDN", app_version=1, application_data=b"esp32 test")
             async with ldn.create_network(param) as network:
                 sock = userspace_ip.udp_socket("ldn-tap", 12345)
                 raw = userspace_ip.packet_socket("ldn-tap")
@@ -493,7 +525,7 @@ def test_first_contact_sees_and_decodes_a_simulated_host():
         async def run():
             param = ldn.CreateNetworkParam(
                 keys=KEYS, channel=6, local_communication_id=0x0100ABCD00000000,
-                name=b"PkCamp", app_version=1, application_data=b"first contact")
+                name=b"POKELDN", app_version=1, application_data=b"first contact")
             async with ldn.create_network(param):
                 up.set()
                 await trio.to_thread.run_sync(done.wait)
@@ -560,8 +592,14 @@ def test_userspace_socket_readiness_tracks_queued_datagrams(monkeypatch, tcp):
     import socket
     from pokeldn.ldn.userspace_ip import _Readable
 
+    def tcp_pair():
+        # Windows' socketpair is a loopback TCP pair; 3.13.15's own fallback fails on macOS
+        with socket.create_server(("127.0.0.1", 0)) as server:
+            client = socket.create_connection(server.getsockname())
+            return server.accept()[0], client
+
     if tcp:
-        monkeypatch.setattr(socket, "socketpair", socket._fallback_socketpair)
+        monkeypatch.setattr(socket, "socketpair", tcp_pair)
     with _Readable() as queue:
         if tcp:
             assert queue._w.getsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY)
@@ -830,7 +868,7 @@ def test_the_sword_gift_walks_its_fragments_on_a_simulated_board(tmp_path, monke
     keys_file = tmp_path / "prod.keys"
     keys_file.write_text("".join(f"{k} = {v.hex()}\n" for k, v in KEYS.items()))
     args = swsh_gift_host.build_parser().parse_args(
-        ["--species", "25", "--level", "25", "--nickname", "PKCAMP", "--ot", "POKELDN",
+        ["--species", "25", "--level", "25", "--nickname", "POKELDN", "--ot", "POKELDN",
          "--channel", "6"])
     record = swsh_gift_host.build_record(args)
     fragments = beacon.build_message(record)
@@ -863,7 +901,8 @@ def test_the_sword_gift_walks_its_fragments_on_a_simulated_board(tmp_path, monke
         seen = {}
         deadline = time.time() + 20
         while len(seen) < 3 and time.time() < deadline:
-            for net in trio.run(lambda: ldn.scan(KEYS, channels=[6], dwell_time=0.3)):
+            # A 0.3 s scan locks to the 0.6 s walk and samples fragments 0 and 1 only; 0.27 s drifts.
+            for net in trio.run(lambda: ldn.scan(KEYS, channels=[6], dwell_time=0.27)):
                 assert net.local_communication_id == COMM_ID and net.max_participants == 8
                 seen[bytes(net.application_data)] = True
     finally:
@@ -924,7 +963,8 @@ def test_the_firered_gift_host_comes_up_and_advertises_on_a_simulated_board(tmp_
 
 
 def test_the_lets_go_joiner_reaches_the_game_on_simulated_boards(tmp_path, monkeypatch):
-    """bin/lgpe_join.py against bin/lgpe_host.py: association through the kind-1 identity both ways."""
+    """bin/lgpe_join.py against bin/lgpe_host.py: association through the kind-1 identity both ways,
+    each under its own trainer's name."""
     import threading
 
     import lgpe_host
@@ -955,12 +995,13 @@ def test_the_lets_go_joiner_reaches_the_game_on_simulated_boards(tmp_path, monke
     result = {}
     threads["host"] = threading.Thread(target=lambda: result.setdefault("host", lgpe_host.main(
         ["--keys", str(keys_file), "--channel", "6", "--seconds", "14", "--grace", "0",
-         "--first", "echo", "--capture", str(tmp_path / "host.jsonl")])), daemon=True)
+         "--first", "echo", "--trainer-name", "HOSTER", "--capture", str(tmp_path / "host.jsonl")])),
+        daemon=True)
     threads["join"] = threading.Thread(target=lambda: result.setdefault("join", lgpe_join.main(
         ["--keys", str(keys_file), "--channels", "6", "--dwell", "0.5", "--connect",
          "--connect-seconds", "10", "--facts", str(tmp_path / "facts.json"),
          "--capture", str(tmp_path / "join.jsonl"),
-         "--reliable-payload", str(tmp_path / "identity.bin"),
+         "--reliable-payload", str(tmp_path / "identity.bin"), "--trainer-name", "JOINER",
          "--ack-peer-clock", "--ack-re-announce"])), daemon=True)
     wlan.set_factory(factory)
     try:
@@ -974,8 +1015,99 @@ def test_the_lets_go_joiner_reaches_the_game_on_simulated_boards(tmp_path, monke
         host_radio.close()
         join_radio.close()
     assert result == {"host": 0, "join": 0}
-    assert (tmp_path / "host.jsonl.payload1.bin").read_bytes() == identity
-    assert (tmp_path / "join.jsonl.payload1.bin").read_bytes() == identity
+
+    def named(name):
+        return pb7.build_message(pb7.FIRST_MESSAGE, pb7.set_trainer_name(identity[pb7.HEADER_SIZE:], name))
+    assert (tmp_path / "host.jsonl.payload1.bin").read_bytes() == named("JOINER")
+    assert (tmp_path / "join.jsonl.payload1.bin").read_bytes() == named("HOSTER")
+
+
+def test_the_lets_go_joiner_trades_its_queue_on_one_seat_on_simulated_boards(tmp_path, monkeypatch):
+    """bin/lgpe_join.py with two --offer against bin/lgpe_host.py --lead, which plays a console host:
+    trade 2 offers on kind 4 and commits on kind 5 on clones 6 and 7, and each side writes what it
+    received in order."""
+    import struct
+    import threading
+
+    import lgpe_host
+    import lgpe_join
+    from pokeldn import pokemon
+    from pokeldn.ldn import userspace_ip
+    from pokeldn.lgpe import pb7
+
+    monkeypatch.setenv("POKELDN_RADIO", "esp32:simulated")
+    monkeypatch.setattr(pokemon, "prepare_file", lambda game, path, fresh=False: path)
+    keys_file = tmp_path / "prod.keys"
+    keys_file.write_text("".join(f"{k} = {v.hex()}\n" for k, v in KEYS.items()))
+
+    def record(name, species, ec):
+        plain = bytearray(pb7.BOX_SIZE)
+        struct.pack_into("<IH", plain, 0, ec, 0)
+        struct.pack_into("<H", plain, 8, species)
+        (tmp_path / name).write_bytes(pb7.encrypt(bytes(plain)))
+        return str(tmp_path / name)
+
+    host_offers = [record("pikachu.pb7", 25, 0x11111111), record("onix.pb7", 95, 0x22222222)]
+    join_offers = [record("eevee.pb7", 133, 0x33333333), record("bulbasaur.pb7", 1, 0x44444444)]
+    air = esp32_sim.Air()
+    host_radio = esp32.Radio(esp32_sim.SimulatedBoard(air).host_stream())
+    join_radio = esp32.Radio(esp32_sim.SimulatedBoard(air).host_stream())
+    threads = {}
+
+    @contextlib.asynccontextmanager
+    async def factory():
+        radio = join_radio if threading.current_thread() is threads.get("join") else host_radio
+        esp = esp32_wlan.EspFactory(radio, port_factory=userspace_ip.userspace_port,
+                                    join_timeout=5)
+        try:
+            yield esp
+        finally:
+            esp.router.close()
+
+    result = {}
+    threads["host"] = threading.Thread(target=lambda: result.setdefault("host", lgpe_host.main(
+        ["--keys", str(keys_file), "--channel", "6", "--seconds", "30", "--grace", "0",
+         "--first", "echo", "--lead", "1", "--result-after", "2",
+         "--offer", host_offers[0], "--next-offer", host_offers[1],
+         "--received", str(tmp_path / "host_got.pb7"),
+         "--capture", str(tmp_path / "host.jsonl")])), daemon=True)
+    threads["join"] = threading.Thread(target=lambda: result.setdefault("join", lgpe_join.main(
+        ["--keys", str(keys_file), "--channels", "6", "--dwell", "0.5", "--connect",
+         "--connect-seconds", "26", "--grace", "0", "--facts", str(tmp_path / "facts.json"),
+         "--capture", str(tmp_path / "join.jsonl"), "--ack-peer-clock", "--ack-re-announce",
+         "--offer", join_offers[0], "--offer", join_offers[1],
+         "--received", str(tmp_path / "join_got.pb7")])), daemon=True)
+    wlan.set_factory(factory)
+    try:
+        threads["host"].start()
+        time.sleep(2)
+        threads["join"].start()
+        threads["join"].join(60)
+        threads["host"].join(60)
+    finally:
+        wlan.set_factory(None)
+        host_radio.close()
+        join_radio.close()
+
+    def species(name):
+        return int.from_bytes(pb7.decrypt((tmp_path / name).read_bytes()[:pb7.BOX_SIZE])[8:10], "little")
+
+    def sent(capture):
+        """(kind, step) of each game message the other side received, from its payload files."""
+        out = []
+        for path in sorted(tmp_path.glob(f"{capture}.payload*.bin"),
+                           key=lambda p: int(p.name.rsplit("payload", 1)[1][:-4])):
+            m = pb7.parse_message(path.read_bytes())
+            out.append((m["kind"], m["step"]))
+        return out
+
+    assert result == {"host": 0, "join": 0}
+    assert [species("join_got.pb7"), species("join_got-2.pb7")] == [25, 95]
+    assert [species("host_got.pb7"), species("host_got-2.pb7")] == [133, 1]
+    # The joiner's answers, as the host read them: identity, offer, commits 1 and 2, then trade 2 on
+    # kinds 4 and 5. After the last queued trade it sends no kind 6.
+    assert sent("host.jsonl") == [(1, 1), (2, 2), (3, 3), (3, 4), (4, 5), (4, 6), (5, 7), (5, 8)]
+    assert sent("join.jsonl")[-1] == (6, 9)
 
 
 def test_the_bench_counts_every_message_from_a_simulated_board():
@@ -1025,6 +1157,58 @@ def test_the_fast_rate_comes_from_the_environment(monkeypatch):
     assert rates[-1] == 921600 and 2000000 in rates
 
 
+@pytest.mark.parametrize("version", ["1.4.0", ""])
+def test_a_board_whose_host_dies_leaves_the_network_and_an_older_board_is_never_fed(monkeypatch, version):
+    """A host killed mid-seat stops sending ALIVE; the board leaves and the console's AP sees the
+    station go. Firmware that names no version answers ALIVE as unknown, so it is never sent."""
+    import serial
+    air = esp32_sim.Air()
+    ap_board, station_board = esp32_sim.SimulatedBoard(air), esp32_sim.SimulatedBoard(air)
+    station_board.version, station_board.host_silent_after = version, 0.3
+    commands = []
+    command = station_board._command
+    station_board._command = lambda t, p: (commands.append(t), command(t, p))
+
+    class Port:
+        def __init__(self):
+            self.board, self.baudrate = station_board.host_stream(), 115200
+
+        def open(self):
+            pass
+
+        def read(self, n):
+            return self.board.read(n)
+
+        def write(self, data):
+            self.board.write(data)
+
+        def flush(self):
+            pass
+
+        def close(self):
+            self.board.close()
+
+    monkeypatch.setattr(serial, "Serial", Port)
+    monkeypatch.setattr(esp32, "ALIVE_EVERY", 0.05)
+    ap = esp32.Radio(ap_board.host_stream())
+    station = esp32.Radio.open_serial("sim", fast_baud=115200)
+    try:
+        ap.ap_start(6, b"\x02" * 6, "0" * 32, bytes(16))
+        station.sta_join(6, b"\x02" * 6, "0" * 32, bytes(16))
+        time.sleep(0.6)                                  # twice the silence the board allows
+        assert ap_board.stations                             # fed, still seated
+        station._closed = True                            # the process is gone: nothing more is sent
+        deadline = time.monotonic() + 2
+        while ap_board.stations and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert (not ap_board.stations) == bool(version)
+        assert (esp32.CMD_ALIVE in commands) == bool(version)
+    finally:
+        station._closed = False
+        station.close()
+        ap.close()
+
+
 def test_auto_port_takes_the_one_serial_port_and_refuses_to_guess():
     from pokeldn.ldn import esp32_wlan
     assert esp32_wlan.auto_port(["/dev/cu.usbserial-7"]) == "/dev/cu.usbserial-7"
@@ -1047,3 +1231,81 @@ def test_windows_auto_port_enumerates_usb_without_opening_it(monkeypatch):
     found.append(SimpleNamespace(device="COM5", vid=0x10C4))
     with pytest.raises(RuntimeError, match="exactly one"):
         esp32_wlan.auto_port()
+
+
+def test_sword_host_and_joiner_trade_on_simulated_boards(tmp_path, monkeypatch):
+    """bin/swsh_connect.py against bin/swsh_host.py: two trades on one session, each side offering
+    its queued records in order and saving the other's. The host plays a console's player: it accepts
+    first and offers again from the box after the first trade (--lead)."""
+    import threading
+
+    import swsh_connect
+    import swsh_host
+    from test_swsh_trade_payload import a_payload
+    from pokeldn import gen8, pokemon as pokemon_service
+    from pokeldn.ldn import userspace_ip
+    from pokeldn.swsh import pokemon
+
+    monkeypatch.setenv("POKELDN_RADIO", "esp32:simulated")
+    monkeypatch.setattr(pokemon_service, "prepare_file", lambda game, path, **kw: path)
+    monkeypatch.setattr(pokemon_service, "prepare", lambda game, raw, **kw: gen8.decrypt(raw))
+    keys_file = tmp_path / "prod.keys"
+    keys_file.write_text("".join(f"{k} = {v.hex()}\n" for k, v in KEYS.items()))
+    party = a_payload(count=4)
+    (tmp_path / "snapshot.bin").write_bytes(party)
+    for slot in range(4):
+        (tmp_path / f"offer{slot}.pk8").write_bytes(party[slot * gen8.SIZE_PARTY:(slot + 1) * gen8.SIZE_PARTY])
+    air = esp32_sim.Air()
+    host_radio = esp32.Radio(esp32_sim.SimulatedBoard(air).host_stream())
+    join_radio = esp32.Radio(esp32_sim.SimulatedBoard(air).host_stream())
+    threads = {}
+
+    @contextlib.asynccontextmanager
+    async def factory():
+        radio = join_radio if threading.current_thread() is threads.get("join") else host_radio
+        esp = esp32_wlan.EspFactory(radio, port_factory=userspace_ip.userspace_port, join_timeout=5)
+        try:
+            yield esp
+        finally:
+            esp.router.close()
+
+    result = {}
+    threads["host"] = threading.Thread(target=lambda: result.setdefault("host", swsh_host.main(
+        ["--keys", str(keys_file), "--channel", "6", "--seconds", "50", "--accept-first",
+         "--lead", "3",
+         "--snapshot", str(tmp_path / "snapshot.bin"), "--received", str(tmp_path / "host.pk8"),
+         "--offer-file", str(tmp_path / "offer0.pk8"), "--offer-file", str(tmp_path / "offer1.pk8")])),
+        daemon=True)
+    threads["join"] = threading.Thread(target=lambda: result.setdefault("join", swsh_connect.main(
+        ["--keys", str(keys_file), "--preset", "trade", "--channels", "6", "--dwell", "0.5",
+         "--hold", "35", "--save-offered", str(tmp_path / "join.pk8"),
+         "--offer-file", str(tmp_path / "offer2.pk8"), "--offer-file", str(tmp_path / "offer3.pk8")])),
+        daemon=True)
+    wlan.set_factory(factory)
+    try:
+        threads["join"].start()          # before the host: the joiner rescans until it appears
+        time.sleep(1.5)
+        threads["host"].start()
+        threads["join"].join(120)
+        threads["host"].join(120)
+    finally:
+        wlan.set_factory(None)
+        host_radio.close()
+        join_radio.close()
+    assert result == {"host": 0, "join": 0}
+
+    def species(name):
+        return pokemon.read(pokemon.encrypt(gen8.load((tmp_path / name).read_bytes())))["species"]
+    assert [species(n) for n in ("join.pk8", "join-2.pk8")] == [94, 95]
+    assert [species(n) for n in ("host.pk8", "host-2.pk8")] == [96, 97]
+
+
+@pytest.mark.parametrize("platform", ["linux", "darwin", "win32"])
+def test_the_board_needs_no_privilege_on_any_platform(monkeypatch, platform):
+    """A kernel TAP needs CAP_NET_ADMIN, which the desktop app never has; it is opt-in on Linux."""
+    from pokeldn.ldn import userspace_ip
+    monkeypatch.delenv("POKELDN_L2", raising=False)
+    monkeypatch.setattr(esp32_wlan.sys, "platform", platform)
+    assert esp32_wlan.default_port_factory() is userspace_ip.userspace_port
+    monkeypatch.setenv("POKELDN_L2", "tap")
+    assert esp32_wlan.default_port_factory() is esp32_wlan.kernel_tap

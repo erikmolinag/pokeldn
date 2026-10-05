@@ -9,7 +9,7 @@ nav_order: 4
 Every address here was read off the console's own cartridge through the Mystery Gift link
 (`memory-dump`, `memory-scan`, `table-scan`, `call-chain`, on [Code on the console](frlg_rom.md)).
 `pokeldn/frlg/rom/rom_map.py` records how each was obtained; `tests/test_rom_map.py` checks it against
-the dumps. The cartridge image, read later, confirms them.
+the dumps. The cartridge image agrees with every one.
 
 Addresses are French FireRed, cartridge BPRF, software version 0x0A. LeafGreen's are on
 [LeafGreen](frlg_leafgreen.md).
@@ -27,9 +27,9 @@ The Switch release carries the GBA ROM as the only file in its RomFS.
 
 The header at 0xA0 reads `POKEMON FIRE` `BPRF` and `POKEMON LEAF` `BPGF`, version 0x0A.
 
-The French FireRed 1.0.1 update leaves the cartridge unchanged. Its guest ROM, read on a retail console
-through `rom-checksum` and a byte read of the one differing stretch, equals `FireRed_f.gba` across
-`0x08000000..0x09000000` apart from the wrapper's three load-time patches ([frlg_rom.md](frlg_rom.md),
+The French FireRed 1.0.1 update leaves the cartridge unchanged: its guest ROM, read on a retail
+console through `rom-checksum` and a byte read of the one differing stretch, equals `FireRed_f.gba`
+across `0x08000000..0x09000000` apart from the wrapper's three load-time patches ([frlg_rom.md](frlg_rom.md),
 The breakpoint hooks); `0x09000000..0x0A000000` reads the open bus (each halfword its own address
 halved) on both.
 
@@ -43,8 +43,8 @@ The Program NCA has one CTR RomFS section and no update, so `bktr_read.py` refus
     ./.venv/bin/python scratchpad/base_romfs.py "$NSP" --list
     ./.venv/bin/python scratchpad/base_romfs.py "$NSP" --extract /FireRed_f.gba --out scratchpad/FireRed_f.gba
 
-`rom_map.CREATE_MON` is 0x08041150 and the image reads `f0b5 4746 80b4 87b0` there, the prologue the
-`create-mon` payload was written against. A body nobody has dumped is readable offline.
+`rom_map.CREATE_MON` is 0x08041150 and the image reads `f0b5 4746 80b4 87b0` there, the prologue
+`asm/create-mon.s` relies on. Any function body is readable offline from the image.
 
 ## EWRAM is at the same addresses in both builds
 
@@ -58,8 +58,8 @@ independently agree with `pokefirered_switch.elf`:
 IWRAM does not transfer: `gSaveBlock1Ptr` is 0x030042D8 in the English build and 0x03004228 on the
 cartridge.
 
-Every sized EWRAM symbol in the ELF, subtracted from the region, leaves one span no symbol claims, in
-every game state (`nm -S pokefirered_switch.elf`, `scratchpad/ram_survey.py`):
+Subtracting every sized EWRAM symbol in the ELF from the region leaves one span no symbol claims
+(`nm -S pokefirered_switch.elf`, `scratchpad/ram_survey.py`):
 
     highest symbol end   0x0203FBAC
     EWRAM end            0x02040000
@@ -98,9 +98,10 @@ LeafGreen's RAM is English FireRed's; of a resident hook's addresses only `m4aSo
 `tests/test_frlg_english_cartridges.py` runs the English payloads on both retail images through each
 cartridge's own `Client_RunBufferScript`; it skips when `scratchpad/frlg_en/` holds no image.
 
-An emulated English FireRed (USA v0, `0100554023408000`) reports `BPRE`, takes and shows a Wonder Card,
-and runs an English `call-chain`: `SpeciesToNationalPokedexNum` at `0x08046A41` returned 252 for species
-277, `VarGet` at `0x08071CD5` returned. The game saves after both.
+English FireRed (USA v0, `0100554023408000`) reports `BPRE` in its game data, accepts and shows a
+Wonder Card, and runs an English `call-chain`: `SpeciesToNationalPokedexNum` at `0x08046A41` answers
+252 for species 277, and `VarGet` at `0x08071CD5` returns. Verified on an emulated console; both
+sessions end in a success message, which saves [mystery_gift_menu.c:1379].
 
 ## The BIOS wrappers
 
@@ -124,9 +125,9 @@ larger); it helps only data over 1024 bytes.
 
 ## The first anchor
 
-`anchors` returns the address after `Client_RunBufferScript`'s call, `0x08148C75`. Everything else grew
-from there: dump a caller, disassemble it, read its literal pool and `bl` targets, dump any pointer table
-it names, check every entry lands on a known prologue (`scratchpad/rom_read.py`).
+`anchors` returns the address after `Client_RunBufferScript`'s call, `0x08148C75`. Every other address
+is reached from it: a caller's literal pool and `bl` targets name the next functions, a pointer table it
+names gives more, and every entry must land on a known prologue (`scratchpad/rom_read.py`).
 
 A dump at 0x08148A00 disassembles as `Client_RunBufferScript` [mystery_gift_client.c:274], `cmp r0,#1`
 at 0x08148C74. Its literal pool:
@@ -166,7 +167,7 @@ in one run: `gSpecialVars` = 0x081639A8, `gSpecialVar_0x8000` = 0x020370B4, the 
 [ld_script_rev10.ld:318] and `.rodata` starts below `gSpeciesInfo`. `gSpecialVar_0x8000` is
 `EWRAM_DATA`, a link-time global safe to name as a constant.
 
-### `gScriptCmdTable`, derived rather than searched
+### `gScriptCmdTable`
 
 `script_data` opens with `gScriptCmdTable` (214 four-byte entries) and puts `gSpecialVars` right after it
 [ld_script_rev10.ld:318], so it starts at 0x08163650 and one 856-byte dump reads it. All 214 words are
@@ -211,8 +212,7 @@ zero until a script runs.
 
 All 256 KB of EWRAM in 86 calls gave one hit, at 0x0203AA94 holding 0x081DE144:
 `sMysteryEventScriptContext` = 0x0203AA38, the table = 0x081DE144. The 17 entries are odd, distinct,
-inside `.text`, span 1084 bytes, and follow the order of `mystery_event.OPCODE_NAMES`, which was written
-from the console's behaviour:
+inside `.text`, span 1084 bytes, and follow the order of `mystery_event.OPCODE_NAMES`:
 
 | # | command | handler | | # | command | handler |
 |---|---|---|---|---|---|---|
@@ -253,8 +253,8 @@ bounding each body by the next entry and its own epilogue, and prints the next r
 entries clustered into ranked `--dump-address` windows.
 
 The ROM is agbcc-built and ends a THUMB function `pop {r4,r5,r6}; pop {r1}; bx r1` (BC70 BC02 4708),
-never `pop {..., pc}`. A reader looking only for 0xBDxx walks into the next function (one 4-call handler
-came back with 25 `bl` targets). `pokeldn/frlg/rom/thumb.py` also matches `bx Rn` and treats a return as
+never `pop {..., pc}`. A reader looking only for 0xBDxx walks into the next function.
+`pokeldn/frlg/rom/thumb.py` also matches `bx Rn` and treats a return as
 a boundary only when a prologue follows.
 
 ### Naming 300 workers offline
@@ -262,12 +262,12 @@ a boundary only when a prologue follows.
 `scripts/gen_worker_names.py` zips every dumped body against the decomp, all four tables at once, and
 writes `pokeldn/frlg/rom/worker_names.py`. Four checks:
 
-| check | what it rules out | what it cost |
-|---|---|---|
-| length | inlining, `__umodsi3`, a macro read as a call | 22 bodies dropped |
-| anchor | a misaligned body: every measured address must land back on its own name | 1 body dropped |
-| agreement | a target named differently by two callers | 0 |
-| link order | a name in the wrong place in the ROM | 1 address dropped |
+| check | what it rules out |
+|---|---|
+| length | inlining, `__umodsi3`, a macro read as a call |
+| anchor | a misaligned body: every measured address must land back on its own name |
+| agreement | a target named differently by two callers |
+| link order | a name in the wrong place in the ROM |
 
 Across the 164 aligned bodies the anchor check lands on 68 distinct measured names, 557 times, each on its
 own address. agbcc emits a translation unit in definition order and `ld_script_rev10.ld:53` lists the
@@ -282,14 +282,14 @@ Reading the source:
 - `firered_switch` is `GAME_VERSION=FIRERED GAME_REVISION=10 MODERN=0` [Makefile:227]: the 203
   `#if REVISION >= 0xA` blocks are live, their `#else` is not.
 - Evaluation is post-order: `VarGet(ScriptReadHalfword(ctx))` is `bl ScriptReadHalfword` then `bl VarGet`.
-- A macro is not a call: `#define ScriptReadByte(ctx) (*(ctx->scriptPtr++))` [include/script.h:24] put a
-  phantom `bl` in 151 bodies; removing it took the names from 136 to 180.
+- A macro is not a call: `#define ScriptReadByte(ctx) (*(ctx->scriptPtr++))` [include/script.h:24]
+  emits no `bl`, and it appears in 151 bodies.
 - `NDEBUG` holds: `ScrCmd_special` makes two calls on the cartridge, and the assert would add a third.
 
-Names coined here that the decomp already has, confirmed by every body reaching the address
+`rom_map` names that the decomp also has, confirmed by every body reaching the address
 (`rom_map.DECOMP_NAMES` is the join):
 
-| this project | the decomp | bodies agreeing |
+| `rom_map` name | the decomp | bodies agreeing |
 |---|---|---|
 | `GET_MON_DATA` | `GetMonData3` | 15 |
 | `SCRIPT_CONTEXT_SET_NATIVE` | `SetupNativeScript` | 11 |
@@ -301,8 +301,8 @@ Names coined here that the decomp already has, confirmed by every body reaching 
 `GetMonData` is a macro dispatching on argument count [include/pokemon.h:343]; `GetMonData2` is
 `__attribute__((alias("GetMonData3")))` [pokemon.c:2970]: one address, three names.
 
-A worker reached by exactly as many commands as the decomp says call it is a measurement: `Compare` came
-back with the eight `compare_*` commands, `StringCopy` with the seven `buffer*` ones plus the two specials
+A worker reached by exactly as many commands as the decomp says call it is confirmed: `Compare` is
+reached by the eight `compare_*` commands, `StringCopy` by the seven `buffer*` ones plus the two specials
 that build a name from `gText_BigGuy`. `0x0806D0EC` is `StopScript(ctx)` [script.c:76], `ScrCmd_end`'s
 call; `ScriptContext_Stop(void)` [:360] is 0x0806D418, called by twelve handlers and the whole of
 `ScrCmd_waitstate` besides `return TRUE`.
@@ -310,8 +310,8 @@ call; `ScriptContext_Stop(void)` [:360] is 0x0806D418, called by twelve handlers
 ### Two mixed-image hazards
 
 - Never read two cartridges' dumps as one image. LeafGreen keeps this code −0x2C away, so a LeafGreen
-  dump placed at its FireRed `--dump-address` answers wrongly: a mixed image made `gSpecials[54]`
-  (`Script_HasTrainerBeenFought`, `FlagGet(GetTrainerAFlag())`) call `FlagSet`, which is
+  dump placed at its FireRed `--dump-address` answers wrongly: a mixed image reads `gSpecials[54]`'s
+  (`Script_HasTrainerBeenFought`, `FlagGet(GetTrainerAFlag())`) call as `FlagSet`, which is
   `SetBattledTrainerFlag2` at +0x2C. `script_read.every_dump` takes one cartridge (FireRed by default),
   from the run's `--expect-console`, falling back to the tag.
 - Read every dump at once. `scrcmd.Memory` merges overlapping and adjacent dumps so a block straddling
@@ -362,10 +362,9 @@ The Mystery Event VM's workers:
 two is `VarGet`'s body.
 
 The call veneers are `bx rN` plus alignment, four bytes each: r0 0x081E2224, r1 0x081E2228 and r3
-0x081E2230 measured, so 0x081E2234 is `_call_via_r4` and 0x081E223C `_call_via_r6` (the link-order check
-rejected a `game_clear.c` name for 0x081E2234).
+0x081E2230 measured, so 0x081E2234 is `_call_via_r4` and 0x081E223C `_call_via_r6`.
 
-# Reading the console's scripts as scripts
+# Reading the console's scripts
 
 With `gScriptCmdTable` measured and operand widths generated from the decomp's macros
 (`scripts/gen_scrcmd_args.py` → `pokeldn/frlg/rom/scrcmd_args.py`: each `.macro` emits its opcode as a
@@ -406,13 +405,8 @@ starts with its own literal opcode byte and reaches no other command macro.
 `trainerbattle` has a head of type, trainer and localId, then one to four pointers chosen by the type. It
 is `scrcmd_args.VARIABLE`; a type outside the decomp's ten makes `scrcmd.shape` answer `None`.
 
-0x081A7699..0x081A77A3 is `data/scripts/trainer_battle.inc`. Before the conditional macros:
-
-    0x081A76A8  4F  applymovement 0x800F, 0x081A77B0, 0x51, 0x0000, 0x36800D26
-    0x081A76B6  00  nop
-    0x081A76B7  21  compare_var_to_value 0x800D, 0x0000
-
-After:
+0x081A7699..0x081A77A3 is `data/scripts/trainer_battle.inc`. The macros make `applymovement` 7 bytes and `waitmovement` 3; reading them as fixed-width commands
+desynchronises the region. Read correctly:
 
     0x081A76A8  4F  applymovement 0x800F, 0x081A77B0     @ VAR_LAST_TALKED, Movement_RevealTrainer
     0x081A76AF  51  waitmovement 0x0000
@@ -463,8 +457,8 @@ A known command whose operands run past the dump's end means the dump is short, 
 
 `gSpeciesInfo` = 0x0824CDFC, stride 28.
 
-A needle of `friendship`, `growthRate` and `eggGroups` at the decomp's 26-byte stride (widest member
-`u16`) matched nothing in 16 MB. The data itself matches the English decomp: `CalculateMonStats`
+A needle of `friendship`, `growthRate` and `eggGroups` at the decomp's 26-byte stride matches nothing
+in 16 MB; the cartridge's stride is 28. The data matches the English decomp: `CalculateMonStats`
 [pokemon.c:2095] recomputed from five party mons' base stats, level, IVs, EVs and nature reproduced 30 of
 30 stored stats.
 
@@ -486,8 +480,8 @@ Traps in modelling the decomp: `[SPECIES_NONE] = {0},` is a one-line block a mul
 
 Scanning for `0x0824CDFC` finds every literal pool holding `&gSpeciesInfo`: 31 hits in
 `0x08028000..0x08048800`, below `Random` at 0x080486B0. Five sit exactly `0x14` apart, one function with
-several pools, so the count is no evidence; object boundaries are. The largest gap (37 KB) is not the
-`pokemon.o` boundary: the hit above it is `battle_ai_switch_items.c:88`. The next gap, 15.6 KB, is
+several pools, so the count is no evidence; object boundaries are. The largest gap (37 KB) lies below
+`battle_ai_switch_items.c:88`, not at `pokemon.o`. The next gap, 15.6 KB, is
 `src/battle_controller_link_opponent.o`, which never references `gSpeciesInfo`.
 
 The first hit of `pokemon.o`'s block is `CreateMon` [pokemon.c:1755], instruction for instruction:
@@ -505,13 +499,13 @@ The first hit of `pokemon.o`'s block is `CreateMon` [pokemon.c:1755], instructio
 All 1006 language-dependent Easy Chat words are read out of the console's ROM.
 `pokeldn/frlg/text/easychat_french_words.py` is the table; `easychat_french.french(id)` answers from it.
 
-## The problem
+## The slot problem
 
 An Easy Chat id is `(group << 9) | index`, a slot. `pokeldn/frlg/text/easychat_words.py` comes from the
 English decomp and names what the English ROM keeps there; each localized ROM has its own
 `gEasyChatGroup_*` tables. Mail, the trainer card quote, the visiting trainer's lines,
 `--denied-message` and the questionnaire gate all depend on the French one. Rendered on the console,
-`EC_WORD_ENJOY` printed STRESSE, `EC_WORD_DONE` FURAX, `SPEECH/12` LES.
+`EC_WORD_ENJOY` renders as STRESSE, `EC_WORD_DONE` as FURAX, `SPEECH/12` as LES.
 
 ## Finding the table
 
@@ -543,7 +537,7 @@ Divergence from the English table depends on the group:
 - `EC_GROUP_SPEECH`: `but`→MAIS, `however`→CEPENDANT, `how`→COMMENT, `the`→LE line up, and LES and L'
   took the slots English spends on `case` and `miss`.
 
-Proper-noun groups barely moved; ordinary vocabulary moved a lot. An id alone does not tell.
+Proper-noun groups barely differ; ordinary vocabulary differs widely.
 
 807 slots need no reading: `EC_GROUP_POKEMON`, `POKEMON_2`, `MOVE_1` and `MOVE_2` print from
 `gSpeciesNames` / `gMoveNames` [easy_chat.c:155], localized by the console. `easychat.species_word(55)`
@@ -560,14 +554,15 @@ easychat_french.check(ids, strict=True)              # raises on anything unread
 
 `check` catches an id that is not a word, such as an index past the end of its group.
 
-    ./scratchpad/run_mg_board.sh <tag> --buffer-script string-gather --gather-address 0x083DF5C0 \
-        --gather-count 42 --gather-stride 12 --version firered    # one group per run
-    ./.venv/bin/python scratchpad/ec_words.py --group 4 --tag <tag> scratchpad/<tag>_dump.bin
+    POKELDN_RADIO=esp32:auto ./.venv/bin/python -u bin/frlg_mg_host.py --live --keys PROD_KEYS \
+        --buffer-script string-gather --gather-address 0x083DF5C0 --gather-count 42 \
+        --gather-stride 12 --dump-file DUMP.bin --version firered    # one group per run
+    ./.venv/bin/python scratchpad/ec_words.py --group 4 DUMP.bin
     ./.venv/bin/python scratchpad/ec_words.py --report
 
 `scratchpad/ec_locate.py` finds the table in a scan answer and checks a dump against the decomp's counts;
 `scratchpad/ec_words.py` holds the 22 word-array addresses.
 
 LeafGreen's whole Easy Chat region is FireRed's shifted by −0x1C4, with identical vocabulary: 22 entries,
-every count equal, and one group's `string-gather` returned 26/26 words in the same slots.
+every count equal, and a `string-gather` of one group reads the same words in the same slots.
 `easychat_french` answers for both consoles.

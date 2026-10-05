@@ -27,6 +27,12 @@ CMD_SNIFF = 0x0A
 CMD_STATUS = 0x0B
 CMD_BENCH = 0x0C
 CMD_LED = 0x0D
+CMD_DISPLAY = 0x0E
+# Sent every ALIVE_EVERY s to firmware ALIVE_FIRMWARE and later, which leaves the network once it
+# stops for 5 s; older firmware answers an unknown command. docs/hardware_esp32.md, The host watchdog.
+CMD_ALIVE = 0x0F
+ALIVE_FIRMWARE = (1, 4, 0)
+ALIVE_EVERY = 1.0
 
 # The LED's patterns (firmware/esp32/main/led.h); "auto" hands the LED back to the radio's state.
 LED_PATTERNS = ("auto", "off", "on", "breathe", "blink", "flash3", "ramp-up", "ramp-down", "pulse")
@@ -34,6 +40,31 @@ LED_PATTERNS = ("auto", "off", "on", "breathe", "blink", "flash3", "ramp-up", "r
 
 def led_payload(pattern: str, peak: int = 255, period_ms: int = 0, duration_ms: int = 0) -> bytes:
     return struct.pack("<BBHH", LED_PATTERNS.index(pattern), peak, period_ms, duration_ms)
+
+
+# The screen's shows and sprite slots (firmware/esp32/main/scene.h).
+DISPLAY_SHOWS = ("auto", "trade", "traded", "gift", "gifted", "arrived")
+DISPLAY_SLOTS = ("ours", "theirs", "gift")
+SPRITE_MAX = (64, 64)
+DISPLAY_TEXT = 21
+
+
+def display_show_payload(show: str, hold_s: int = 0, title: str = "", line: str = "") -> bytes:
+    """SHOW: the scene, how long it holds (0: until the next show) and two lines of ASCII text."""
+    text = b"".join(t.encode("ascii", "replace")[:DISPLAY_TEXT] + b"\0" for t in (title, line))
+    return struct.pack("<BBH", 0, DISPLAY_SHOWS.index(show), hold_s) + text
+
+
+def display_sprite_payload(slot: str, rows: list[list[bool]]) -> bytes:
+    """SPRITE: one-bit rows, MSB first, each padded to whole bytes."""
+    height, width = len(rows), len(rows[0]) if rows else 0
+    if width > SPRITE_MAX[0] or height > SPRITE_MAX[1]:
+        raise ValueError(f"a {width}x{height} sprite is larger than {SPRITE_MAX}")
+    bits = bytearray()
+    for row in rows:
+        for start in range(0, width, 8):
+            bits.append(sum(0x80 >> i for i, on in enumerate(row[start:start + 8]) if on))
+    return struct.pack("<BBBB", 1, DISPLAY_SLOTS.index(slot), width, height) + bytes(bits)
 
 MSG_INFO = 0x81
 MSG_RESULT = 0x82
@@ -192,6 +223,14 @@ class Info:
         return cls(payload[0], payload[1:7], payload[7:13], payload[13], payload[14:].decode(errors="replace"))
 
 
+def firmware_version(info: "Info") -> tuple:
+    """The board's "version=1.4.0" as (1, 4, 0); () when it names none."""
+    try:
+        return tuple(int(part) for part in info.firmware_version.split("."))
+    except ValueError:
+        return ()
+
+
 @dataclass
 class Link:
     up: bool
@@ -294,7 +333,7 @@ class Radio:
             except RadioError:
                 if attempt == 4:
                     raise
-        radio.hello()
+        info = radio.hello()
         if fast_baud and fast_baud != baud:
             radio.request(CMD_BAUD, struct.pack("<I", fast_baud), MSG_RESULT)
             radio.drain()
@@ -309,11 +348,21 @@ class Radio:
                 except RadioError:
                     if attempt == 4:
                         raise
-            radio.hello()
+            info = radio.hello()
+        if firmware_version(info) >= ALIVE_FIRMWARE:
+            threading.Thread(target=radio._keep_alive, name="esp32-alive", daemon=True).start()
         if radio._trace:
             # The board's counters (tx_eth_failed, wire_dropped) land in the trace every 5 s.
             threading.Thread(target=radio._poll_status, name="esp32-status", daemon=True).start()
         return radio
+
+    def _keep_alive(self) -> None:
+        while not self._closed:
+            try:
+                self.send(CMD_ALIVE)
+            except Exception:
+                return
+            time.sleep(ALIVE_EVERY)
 
     def _poll_status(self) -> None:
         while not self._closed:
@@ -377,8 +426,10 @@ class Radio:
                 msg_type, payload, frame = self._out.popleft()
                 self._writing = True
                 last, since = self._credited, time.monotonic()
+                # A HELLO restarts the board's count, so it waits until nothing is in flight.
                 while (self._flow and not self._closed
-                       and self._written - self._credited + len(frame) > FLOW_WINDOW):
+                       and (self._written > self._credited if msg_type == CMD_HELLO
+                            else self._written - self._credited + len(frame) > FLOW_WINDOW)):
                     quiet = time.monotonic() - since
                     if self._credited != last:
                         last, since = self._credited, time.monotonic()
@@ -402,9 +453,9 @@ class Radio:
             with self._out_cv:
                 self._written += len(frame)
                 if msg_type == CMD_HELLO:
-                    # The board restarts its count after a HELLO's delimiter; so does the host.
+                    # The board restarts its count after a HELLO's delimiter and answers CREDIT 0
+                    # (firmware wire_credit_reset); the window stays shut across it.
                     self._written = self._credited = self._lost = 0
-                    self._flow = False
                 self._writing = False
                 self._out_cv.notify_all()
 

@@ -17,6 +17,8 @@ from ldn import wlan
 from pokeldn.ldn import esp32, userspace_ip
 
 ETH_P_LDN = 0x88B7
+# A console still advertising refused one join (0xc9, 0x2) and took the next [docs/hardware_esp32.md].
+JOIN_ATTEMPTS = 3
 BROADCAST = wlan.MACAddress("ff:ff:ff:ff:ff:ff")
 
 
@@ -241,17 +243,19 @@ class EspStation:
     @contextlib.asynccontextmanager
     async def connect(self):
         radio, router = self._factory.radio, self._factory.router
-        await trio.to_thread.run_sync(
-            radio.sta_join, self._channel, self._bssid, self._ssid, self._key, self._address)
         with trio.fail_after(self._factory.join_timeout):
-            while True:
-                msg_type, payload = await router.control.receive()
-                if msg_type != esp32.MSG_LINK:
-                    continue
+            for attempt in range(1, JOIN_ATTEMPTS + 1):
+                await trio.to_thread.run_sync(
+                    radio.sta_join, self._channel, self._bssid, self._ssid, self._key, self._address)
+                while True:
+                    msg_type, payload = await router.control.receive()
+                    if msg_type == esp32.MSG_LINK:
+                        break
                 link = esp32.Link.parse(payload)
-                if not link.up:
+                if link.up:
+                    break
+                if attempt == JOIN_ATTEMPTS:
                     raise ConnectionError(f"the board could not join (reason {link.reason:#x})")
-                break
         try:
             async with trio.open_nursery() as nursery:
                 nursery.start_soon(self._pump_control)
@@ -447,8 +451,8 @@ async def kernel_tap(name: str, address: wlan.MACAddress):
 
 
 def default_port_factory():
-    """`POKELDN_L2=tap|userspace` overrides the platform's choice."""
-    choice = os.environ.get("POKELDN_L2") or ("tap" if sys.platform.startswith("linux") else "userspace")
+    """`POKELDN_L2=tap` opts into a Linux kernel TAP, which needs CAP_NET_ADMIN; the app runs unprivileged."""
+    choice = os.environ.get("POKELDN_L2") or "userspace"
     return kernel_tap if choice == "tap" else userspace_ip.userspace_port
 
 
@@ -519,6 +523,15 @@ def led(pattern: str, peak: int = 255, period_ms: int = 0, duration_ms: int = 0)
     if _radio is None:
         return False
     _radio.send(esp32.CMD_LED, esp32.led_payload(pattern, peak, period_ms, duration_ms))
+    return True
+
+
+def display(payload: bytes) -> bool:
+    """Queues a DISPLAY command (esp32.display_*_payload) and never waits; a board without a screen
+    answers ESP_ERR_NOT_FOUND. False when the process has no board."""
+    if _radio is None:
+        return False
+    _radio.send(esp32.CMD_DISPLAY, payload)
     return True
 
 

@@ -8,7 +8,7 @@ import struct
 import pytest
 
 from pokeldn.ldn import clone, reliable3
-from pokeldn.lgpe import pb7
+from pokeldn.lgpe import pb7, reference
 from pokeldn.lgpe.trade import _send_step
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -254,7 +254,8 @@ def test_the_result_carries_our_own_structure(stage, tmp_path):
     assert pb7.valid(body)
 
 
-def test_each_later_trade_offers_the_next_record_on_its_own_kinds_and_clones(stage, tmp_path):
+@pytest.mark.parametrize("later", [2, 5])
+def test_each_later_trade_offers_the_next_record_on_its_own_kinds_and_clones(stage, tmp_path, later):
     """Round r answers offers on kind 2 + 2r, commits on 3 + 2r on clone 4 + 3r, and ends on kind
     4 + 2r; it offers the r-th --next-offer and writes what it received to a numbered file."""
     def record(ec, species):
@@ -265,7 +266,7 @@ def test_each_later_trade_offers_the_next_record_on_its_own_kinds_and_clones(sta
 
     s = stage["s"]
     offers = []
-    for n in (1, 2):
+    for n in range(1, later + 1):
         path = tmp_path / f"next{n}.bin"
         path.write_bytes(record(0x1000 + n, 25 + n))
         offers.append(str(path))
@@ -304,7 +305,7 @@ def test_each_later_trade_offers_the_next_record_on_its_own_kinds_and_clones(sta
         stage["console_says"](4 + 2 * r, theirs, step=step + 2)
         assert s.trade["done"]
         step += 3
-    assert s.round == 2
+    assert s.round == later
 
 
 def test_the_offered_clone_walks_on_to_01_02_02_and_the_trailing_word_2(stage):
@@ -410,8 +411,8 @@ def test_a_second_state_word_4_under_a_fresh_counter_is_answered_again(stage):
 
 
 def test_the_consoles_leave_request_is_acknowledged_and_answered(stage):
-    """A leave request on the reliable port is acked there and answered on the unreliable port; mesh
-    and session shrink to one node."""
+    """A leave request on the reliable port is acked there and answered on the unreliable port with
+    the host's index, twice, as a console host answers it; mesh and session shrink to one node."""
     from pokeldn.ldn import mesh_protocol as mp
     s = stage["s"]
     stage["sent"].clear()
@@ -422,14 +423,32 @@ def test_the_consoles_leave_request_is_acknowledged_and_answered(stage):
     assert len(acks) == 1 and acks[0][1].get("port") == 1
     assert reliable3.parse(acks[0][0])["expected"] == reliable3.FIRST_SEQUENCE + 1
     responses = [(payload, kw) for payload, kw in mesh if payload[0] == mp.LEAVE_RESPONSE]
-    assert len(responses) == 1 and responses[0][0] == b"\x08\x01"
-    assert responses[0][1].get("port", 0) == 0
+    assert [r[0] for r in responses] == [b"\x08\x00"] * 2
+    assert all(r[1].get("port", 0) == 0 for r in responses)
     assert not s.joined and s.session_nodes() == ((s.host.our_ip, lgpe_host.PIA_PORT, 0),)
     updates = [payload for payload, kw in mesh if payload[0] == mp.UPDATE_MESH]
     assert updates and updates[-1][1] == 1, "the mesh update still lists the console"
     s.handle(mp.PROTOCOL, leave)
     assert len([1 for p, payload, kw in stage["sent"] if p == mp.PROTOCOL
-                and payload[0] == mp.LEAVE_RESPONSE]) == 1
+                and payload[0] == mp.LEAVE_RESPONSE]) == 2
+
+
+def test_a_leaving_console_takes_the_hosts_leave_response(stage):
+    """The leave request a leaving console sends, through the host, back into the console's own
+    check (0x591bf4: [1] must be the host's index, else it waits 5000 ms and deauthenticates)."""
+    from pokeldn.ldn import mesh_protocol as mp
+    from pokeldn.lgpe.leave import Leaver
+    s = stage["s"]
+    part = clone.Participant(100.0, dest=1, own=2, station=JOINER)
+    lv = Leaver(part, 3, 11, 2, 2, station=JOINER, host_bit=1)
+    lv.leave_sent = lv.leave_next = 100.0
+    request = [p for p, proto, port in lv.poll(100.0) if proto == mp.PROTOCOL and port == 1]
+    assert len(request) == 1
+    stage["sent"].clear()
+    s.handle(mp.PROTOCOL, request[0])
+    for p, payload, kw in stage["sent"]:
+        lv.receive(p, payload, 100.01)
+    assert lv.leave_answered
 
 
 def test_the_consoles_disconnection_request_is_answered(stage):
@@ -462,3 +481,79 @@ def test_the_host_releases_its_own_copy_after_the_consoles(stage):
     stage["run"](0.1)
     assert len([1 for p, payload, _ in stage["sent"]
                 if p == clone.PROTOCOL and payload[1] == clone.COMMAND_END]) == 3
+
+
+def test_a_lost_request_for_the_commit_clone_is_drawn_again(stage):
+    """A retail host run stalled on the confirmation screen: the console announced the commit clone,
+    acked our take-over, and its 0x82 never reached us, so the type 4 copy that draws its 1 1 1 never
+    went out. The peer-only re-announcement repeats until the 0x82 arrives."""
+    s, sent = stage["s"], stage["sent"]
+
+    def console(kind, ctype, station, dest, payload=b""):
+        s.handle(clone.PROTOCOL, clone.build_command(kind, ctype, station, 4, 1, dest, payload))
+
+    def announces():
+        return [1 for protocol, payload, _ in sent if protocol == clone.PROTOCOL
+                and (c := clone.parse_command(payload)) and c["type"] == clone.COMMAND_ANNOUNCE]
+
+    console(clone.COMMAND_ANNOUNCE, 2, JOINER, 0x3)
+    for ctype in (4, 1):
+        console(clone.CLOCK_AND_COUNT, ctype, 0xFD, 0x1, b"\0\0\x10\0" + b"\x01\x28\x08\xab")
+    stage["run"](0.06)
+    console(clone.CLOCK_AND_COUNT_2, 2, JOINER, 0x1, b"\0\0\x10\0\0\0\0\0")
+    sent.clear()
+    stage["run"](0.05)
+    assert len(announces()) == 1
+    stage["run"](0.12)                       # the 0x82 is lost
+    assert len(announces()) == 2
+    console(clone.COMMAND_REQUEST, 1, 0xFD, 0x1)
+    assert stage["published"](4, ctype=4)[-1] == [0] * 8
+    sent.clear()
+    stage["run"](1.0)
+    assert announces() == []
+
+
+def test_an_unanswered_clone_0_pair_is_repeated_until_the_console_answers(stage):
+    """A retail host stalled on "vous allez bientôt être connecté" when its one clone 0 pair went
+    unanswered; a retail console host repeats its own pair about 110 ms later."""
+    s, sent, clk = stage["s"], stage["sent"], stage["clk"]
+    s.clone_0_announced, s.publish_clone_0_at = False, None
+    s.announce_clone_0_at = clk.t
+
+    def pairs():
+        return sum(1 for protocol, payload, _ in sent if protocol == clone.PROTOCOL
+                   and (c := clone.parse_command(payload)) and c["type"] == clone.CLOCK_AND_PARTICIPANT
+                   and (c["ctype"], c["clone_id"]) == (3, 0))
+
+    stage["run"](0.05)
+    assert pairs() == 1
+    stage["run"](0.12)
+    assert pairs() == 2
+    s.handle(clone.PROTOCOL, clone.build_command(clone.CLOCK_AND_COUNT_2, 3, 0xFD, 0, 9, 0x1,
+                                                 b"\0\0\x10\0\x01\0\0\0"))
+    sent.clear()
+    stage["run"](1.0)
+    assert pairs() == 0
+
+
+def test_the_echoed_identity_names_our_trainer(monkeypatch):
+    """The host answers the console's kind 1 with that message under our trainer's name and ids,
+    the rest of it the console's own."""
+    monkeypatch.setattr(lgpe_host.time, "monotonic", Clock())
+    args = lgpe_host.build_parser().parse_args(
+        ["--first", "echo", "--trainer-name", "ASH", "--our-trainer", "41234:12345"])
+    s = lgpe_host.Session(Radio(), lgpe_host.Advertisement(0x2952124b, 0xe28ef1be), args, lambda **kw: None)
+    s.peer_ip, s.peer_mac, s.joined = "169.254.38.2", bytes.fromhex("48f1eb209b22"), True
+    s.new_clone()
+    sent = []
+    monkeypatch.setattr(s, "send", lambda payload, protocol, **kw: sent.append((protocol, payload)))
+    console = pb7.parse_message(Path(reference.IDENTITY).read_bytes())["body"]
+    console = pb7.set_trainer_id(pb7.set_trainer_name(console, "CONSOLE"), 1, 2)
+    s.handle(reliable3.PROTOCOL, reliable3.build(pb7.build_message(pb7.FIRST_MESSAGE, console),
+                                                 reliable3.FIRST_SEQUENCE, reliable3.FIRST_SEQUENCE))
+    ours = [pb7.parse_message(r["payload"]) for p, payload in sent if p == reliable3.PROTOCOL
+            for r in [reliable3.parse(payload)] if r and r["size"]]
+    assert [m["kind"] for m in ours] == [pb7.FIRST_MESSAGE]
+    body = ours[0]["body"]
+    assert pb7.trainer_name(body) == "ASH" and pb7.trainer_id(body) == (41234, 12345)
+    assert pb7.set_trainer_id(pb7.set_trainer_name(body, "CONSOLE"), 1, 2) == console

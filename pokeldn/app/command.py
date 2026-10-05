@@ -3,8 +3,10 @@ import random
 import time
 from functools import cache
 
+from pokeldn.app import gift_builder
 from pokeldn.app.catalog import Field, Tool
 from pokeldn.app.introspect import flags_of
+from pokeldn.lgpe.session import code_picks
 
 
 @cache
@@ -13,10 +15,16 @@ def accepted(script: str) -> frozenset[str]:
 
 
 def value_of(field: Field, values: dict):
+    if field.kind == "builder" and field.key not in values:
+        return values.get("--record", field.default)
     return values.get(field.key, field.default)
 
 
 def applies(field: Field, tool: Tool, values: dict) -> bool:
+    if field.unless:
+        source = next(f for f in tool.fields if f.key == field.unless)
+        if value_of(source, values):
+            return False
     if not field.when:
         return True
     flag, wanted = field.when
@@ -32,7 +40,9 @@ def offers(value) -> list[dict]:
     return [value] if isinstance(value, dict) else []
 
 
-def _args(field: Field, value) -> list[str]:
+def _args(field: Field, value, tool: Tool) -> list[str]:
+    if field.kind == "builder":
+        return gift_builder.args(tool, value)
     flags = field.flag if isinstance(field.flag, tuple) else (field.flag,)
     if field.kind == "switch":
         on = bool(value) != field.invert
@@ -56,9 +66,12 @@ def _args(field: Field, value) -> list[str]:
 def build(tool: Tool, values: dict, extra: dict, settings, stamp: str | None = None) -> list[str]:
     """The entry point's argument list: tested flags, the tool's fields, then the All tab's."""
     stamp = stamp or time.strftime("%Y%m%d-%H%M%S")
+    game = tool.key.split("-")[0]
+    tid, sid = settings.ids(game)
     tokens = {"{received}": os.path.expanduser(settings.received), "{stamp}": stamp,
               "{src_var}": f"0x{random.getrandbits(32):08x}",
-              "{ot}": settings.ot, "{tid}": str(settings.tid), "{sid}": str(settings.sid)}
+              "{ot}": settings.name(game), "{tid}": str(tid), "{sid}": str(sid),
+              "{language}": str(settings.language)}
     args = []
     for arg in tool.fixed:
         for token, value in tokens.items():
@@ -66,7 +79,7 @@ def build(tool: Tool, values: dict, extra: dict, settings, stamp: str | None = N
         args.append(arg)
     for field in tool.fields:
         if applies(field, tool, values):
-            args += _args(field, value_of(field, values))
+            args += _args(field, value_of(field, values), tool)
     known = accepted(tool.script)
     if "--keys" in known and "--keys" not in args:
         args += ["--keys", os.path.expanduser(settings.keys)]
@@ -92,8 +105,30 @@ def limit_error(field: Field, value) -> str:
 
 
 def problems(tool: Tool, values: dict) -> list[str]:
-    return [error for f in tool.fields if f.limits and applies(f, tool, values)
-            if (error := limit_error(f, value_of(f, values)))]
+    errors = [error for f in tool.fields if applies(f, tool, values)
+            if (error := limit_error(f, value_of(f, values)) if f.limits else code_error(f, value_of(f, values)))]
+    for field in tool.fields:
+        if field.kind == "builder" and (error := gift_builder.problem(tool, value_of(field, values))):
+            errors.append(error)
+    return errors
+
+
+def prepare(tool: Tool, values: dict) -> None:
+    """Write what the arguments name but no field holds yet: a built gift's file."""
+    for field in tool.fields:
+        if field.kind == "builder":
+            gift_builder.prepare(tool, value_of(field, values))
+
+
+def code_error(field: Field, value) -> str:
+    """A Let's Go link code must name three picker Pokemon; a missing one would host under another code."""
+    if field.kind != "linkcode":
+        return ""
+    try:
+        code_picks(str(value or "").split(","))
+    except ValueError:
+        return "Pick three Pokemon for the link code."
+    return ""
 
 
 def missing_offer(tool: Tool, values: dict) -> str:

@@ -6,9 +6,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* S3 and C3 use native USB Serial/JTAG; ESP32 uses UART0. Connect the matching USB port.
+/* S3, C3 and C6 use native USB Serial/JTAG; ESP32 uses UART0. Connect the matching USB port.
    docs/hardware_esp32.md, Supported boards. */
-#if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32C3
+#if CONFIG_IDF_TARGET_ESP32S3 || CONFIG_IDF_TARGET_ESP32C3 || CONFIG_IDF_TARGET_ESP32C6
 #define WIRE_USB 1
 #include "driver/usb_serial_jtag.h"
 #else
@@ -50,7 +50,11 @@ static QueueHandle_t s_out;
 static QueueHandle_t s_uart_events;
 #endif
 static wire_handler_t s_handler;
+/* Set when the host watchdog judges the host gone: messages are discarded, not dropped, until the
+   host speaks again; a dead host's queue would otherwise count a drop per 500 ms write. */
+static atomic_bool s_host_away;
 static atomic_uint s_dropped, s_rx_bad, s_rx_fifo_ovf, s_rx_buffer_full, s_rx_frame_err, s_events_full;
+static atomic_uint s_consumed_total;   /* every host byte taken since boot */
 static uint32_t s_consumed, s_credited;   /* the reader task's own; the handler runs on it */
 /* Maxima for STATUS: a LOG line is refused at the heap floor, which is when the reader stalls.
    docs/hardware_esp32.md, The serial ceiling. */
@@ -82,6 +86,7 @@ static uint32_t crc32(const uint8_t *p, size_t n)
 bool wire_send_wait(uint8_t type, const void *head, size_t head_len, const void *body,
                     size_t body_len, uint32_t ticks)
 {
+    if (atomic_load(&s_host_away)) return true;
     const size_t length = 1 + head_len + body_len;
     if (length > WIRE_MAX_PAYLOAD + 1) return false;
     const uint32_t heap = esp_get_free_heap_size();
@@ -120,6 +125,9 @@ void wire_log(const char *format, ...)
 }
 
 uint32_t wire_dropped(void) { return atomic_load(&s_dropped); }
+
+void wire_set_host_away(bool away) { atomic_store(&s_host_away, away); }
+uint32_t wire_consumed(void) { return atomic_load(&s_consumed_total); }
 uint32_t wire_rx_bad(void) { return atomic_load(&s_rx_bad); }
 uint32_t wire_rx_fifo_ovf(void) { return atomic_load(&s_rx_fifo_ovf); }
 uint32_t wire_rx_buffer_full(void) { return atomic_load(&s_rx_buffer_full); }
@@ -186,6 +194,7 @@ static void write_usb(const uint8_t *p, size_t n)
 {
     const int64_t started = esp_timer_get_time();
     while (usb_serial_jtag_write_bytes(p, n, pdMS_TO_TICKS(20)) != (int)n) {
+        if (atomic_load(&s_host_away)) break;
         if (esp_timer_get_time() - started > 500000) {
             atomic_fetch_add(&s_dropped, 1);
             break;
@@ -218,6 +227,7 @@ static void writer(void *arg)
         }
         memcpy(frame, m->bytes, n);
         free(m);
+        if (atomic_load(&s_host_away)) continue;
 #if !WIRE_USB
         /* uart_write_bytes spins on a full TX ring (IDF 6.1 uart.c:1662) and this task outranks
            the reader on its core, which it starved in the middle of esp_wifi_internal_tx: 111 ms
@@ -302,7 +312,7 @@ static void deliver(const uint8_t *encoded, size_t used)
     if (took > 50000) wire_log("slow command 0x%02x: %u ms", frame[0], (unsigned)(took / 1000));
 }
 
-/* Dual-core targets install the host link on core 1 to separate Wi-Fi interrupts; C3 uses core 0.
+/* Dual-core targets install the host link on core 1 to separate Wi-Fi interrupts; C3 and C6 use core 0.
    Moving classic UART interrupts to core 0 lost 500 host commands in 7 s under a receive flood.
    docs/hardware_esp32.md, The serial ceiling. */
 static void reader(void *arg)
@@ -358,7 +368,8 @@ static void reader(void *arg)
             send_credit();
         }
         for (int i = 0; i < n; ++i) {
-            ++s_consumed;   /* before the handler, so a HELLO's reset excludes its own delimiter */
+            ++s_consumed;
+            atomic_fetch_add(&s_consumed_total, 1);   /* before the handler, so a HELLO's reset excludes its own delimiter */
             if (chunk[i]) {
                 if (used < sizeof(encoded)) encoded[used++] = chunk[i]; else overflow = true;
                 continue;

@@ -20,6 +20,7 @@ from pokeldn.frlg.gift.mg_server import (
     BUFFER_EXPECT_TRAINER_ID, SERVER_RESULT_NAMES, SVR_MSG_CARD_SENT, SVR_MSG_GIFT_SENT_1,
     SVR_MSG_NEWS_SENT, SVR_MSG_STAMP_SENT)
 from pokeldn.ldn import show_done
+from pokeldn.app import screen
 
 MysteryGiftPayload = configmod.MysteryGiftPayload
 MysteryGiftDistribution = configmod.MysteryGiftDistribution
@@ -142,7 +143,8 @@ class MysteryGiftHostApplication(HostApplication):
                   f"language={int.from_bytes(wire[26:28], 'little')}")
         self.info(f"RFU parent identity: raw={self.session.rfu.host_session_id.hex()} "
                   f"u16=0x{int.from_bytes(self.session.rfu.host_session_id, 'little'):04x}")
-        details = gift_registry.GIFT_REGISTRY.describe(payload.gift)
+        details = ("imported gift file" if hasattr(payload, "file") else
+                   gift_registry.GIFT_REGISTRY.describe(payload.gift))
         card_title = charmap.decode(self.card[10:50])
         self.info(f"Gift: {payload.gift!r}; {details}; card title {card_title!r}; "
                   f"Wonder Card flagId {payload.flag_id} "
@@ -186,6 +188,17 @@ class MysteryGiftHostApplication(HostApplication):
     def _hosting_instructions(self):
         return ("Hosting Mystery Gift. On the Switch choose "
                 "Mystery Gift -> Wonder Cards -> Friend.")
+
+    def _screen_card(self):
+        """-> (header, line, species) for the board's screen. The card's icon is a Gen-3 internal
+        species, equal to the national number only up to 251 [wonder_card.py]."""
+        icon = int.from_bytes(self.card[2:4], "little")
+        species = icon if 1 <= icon <= 251 else None
+        return "Mystery Gift", charmap.decode(self.card[10:50]).strip(), species
+
+    def _show_screen(self):
+        title, line, species = self._screen_card()
+        screen.gift(title, line, species=species)
 
     def _rfu_ready_message(self):
         return ("RFU NI handshake complete; parent UNI and Mystery Gift "
@@ -253,7 +266,9 @@ class MysteryGiftHostApplication(HostApplication):
                 and engine.server.mevent_status != mystery_event.STATUS_SUCCESS):
             self.delivery_succeeded = False
         if self.delivery_succeeded:
-            show_done()
+            show_done("delivery")
+            screen.delivered(self._screen_card()[1])
+            screen.drain()
             print(self._success_message(engine.result))
         elif (engine is not None and self.distribution is not None
               and self.distribution.has_mevent and engine.server.mevent_status is not None):
@@ -317,7 +332,9 @@ class WonderNewsHostApplication(MysteryGiftHostApplication):
                   f"language={int.from_bytes(wire[26:28], 'little')}")
         self.info(f"RFU parent identity: raw={self.session.rfu.host_session_id.hex()} "
                   f"u16=0x{int.from_bytes(self.session.rfu.host_session_id, 'little'):04x}")
-        self.info(f"News: {payload.news!r}; {payload.spec.description}; "
+        name = payload.gift if hasattr(payload, "file") else payload.news
+        description = "imported gift file" if hasattr(payload, "file") else payload.spec.description
+        self.info(f"News: {name!r}; {description}; "
                   + wonder_news.describe(news) + f", {len(news)}B")
         self.info("A console that already holds these exact 444 bytes answers "
                   "MG_LINKID_RESPONSE with TRUE and keeps what it has; pass --news-id to make the "
@@ -329,6 +346,9 @@ class WonderNewsHostApplication(MysteryGiftHostApplication):
     def _hosting_instructions(self):
         return ("Hosting Wonder News. On the Switch choose "
                 "Mystery Gift -> Wonder News -> Friend.")
+
+    def _screen_card(self):
+        return "Wonder News", wonder_news.parse(self.distribution.news)["title"].strip(), None
 
     def _success_message(self, result):
         return ("Wonder News delivered. On the Switch it is under Mystery Gift -> Wonder News; "
@@ -353,7 +373,8 @@ class BufferScriptHostApplication(MysteryGiftHostApplication):
                   f"language={int.from_bytes(wire[26:28], 'little')}")
         self.info(f"RFU parent identity: raw={self.session.rfu.host_session_id.hex()} "
                   f"u16=0x{int.from_bytes(self.session.rfu.host_session_id, 'little'):04x}")
-        self.info(f"Buffer script: {payload.script!r}; {payload.spec.description}; "
+        description = "imported console code" if hasattr(payload, "file") else payload.spec.description
+        self.info(f"Buffer script: {payload.script!r}; {description}; "
                   f"{len(code)}B of ARM, {code.hex()}")
         self.info("The console copies it into gDecompressionBuffer and CALLS IT as "
                   "func(&param, gSaveBlock2Ptr, gSaveBlock1Ptr) "
@@ -439,6 +460,9 @@ class BufferScriptHostApplication(MysteryGiftHostApplication):
     def _hosting_instructions(self):
         return ("Hosting a buffer script. On the Switch choose "
                 "Mystery Gift -> Wonder Cards -> Friend.")
+
+    def _screen_card(self):
+        return "Mystery Gift", self.config.payload.script, None
 
     def run(self):
         joined = super().run()

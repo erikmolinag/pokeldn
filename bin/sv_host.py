@@ -27,7 +27,8 @@ from pokeldn.ldn import game_channel
 from pokeldn.ldn.ldn_mitm_host import IpHostTransport
 from pokeldn.ldn.transport import HostTransport, board_radio, find_ap_phy
 from pokeldn.host_support import resolve_keys, needs_root
-from pokeldn.ldn import show_done
+from pokeldn.ldn import left_after_trade, show_done
+from pokeldn.app import screen
 
 PROTOCOL_NAMES = {
     0x08: "keep alive", 0x2C: "net", 0x30: "turn", 0x58: "rtt", 0x65: "sync",
@@ -38,7 +39,7 @@ PROTOCOL_NAMES = {
 }
 SESSION_MESSAGE_NAMES = {
     0: "join request", 1: "join request ack", 2: "join response", 3: "leave request",
-    5: "update session", 6: "update session ack", 7: "left station sync",
+    4: "leave response", 5: "update session", 6: "update session ack", 7: "left station sync",
     8: "left station sync ack", 9: "start host migration", 10: "start host migration ack",
 }
 
@@ -187,13 +188,16 @@ def build_parser():
     ap.add_argument("--ip-host", action="store_true",
                     help="host over ldn_mitm on the LAN for an emulator; no radio and no root")
     ap.add_argument("--our-ip", default=None)
-    ap.add_argument("--player-name", default="PkCamp", help="the LDN node name")
+    ap.add_argument("--player-name", default="POKELDN", help="the LDN node name")
     ap.add_argument("--no-net-probe", action="store_true")
     ap.add_argument("--no-session-ack", action="store_true")
     ap.add_argument("--no-session-response", action="store_true")
     ap.add_argument("--no-session-update", action="store_true")
+    ap.add_argument("--no-leave-response", action="store_true",
+                    help="leave a console's Session type-3 leave request unanswered; it then "
+                         "resends it every 0.5 s and leaves after the fourth (docs/sv.md, Leaving)")
     ap.add_argument("--join-seq", type=int, default=1)
-    ap.add_argument("--host-player-name", default="PkCamp")
+    ap.add_argument("--host-player-name", default="POKELDN")
     ap.add_argument("--host-player-id", default="00000000000000020000000000000000")
     ap.add_argument("--no-rtt", action="store_true", help="do not answer RTT requests")
     ap.add_argument("--no-ack", action="store_true", help="do not acknowledge reliable streams")
@@ -250,6 +254,8 @@ def build_parser():
                          "INITIALIZED and every one is already zlib "
                          "(scratchpad/sv_extract_records.py writes such a set); by default the "
                          "recorded set in pokeldn.sv.reference")
+    ap.add_argument("--trainer-name", default="POKELDN",
+                    help="the player name record 1 of our identity carries, the one the trade screen shows")
     ap.add_argument("--no-identity", action="store_true",
                     help="send no station identity unless --record-set or --send-on-open names "
                          "one; by default the recorded one in pokeldn.sv.reference")
@@ -371,6 +377,7 @@ def main():
                     fh.write(one.hex() + "\n")
             print(f"[sv] offer written to {args.offer_dump}")
             return 0
+        screen.offer("sv", trade_offers[0])
     elif args.offer_set or args.offer_dump:
         ap.error("--offer-set and --offer-dump need --trade-offer")
     def report_offer(ip, body, n):
@@ -379,7 +386,7 @@ def main():
         except ValueError as exc:
             print(f"[sv] {ip}: offered {len(body)} bytes that do not read as a record: {exc}")
         if args.offer_out:
-            path = args.offer_out if n == 1 else f"{args.offer_out}.{n}"
+            path = pokemon_service.trade_path(args.offer_out, n)
             pokemon_service.save_received("sv", path, body)
             print(f"[sv] {ip}: offer written to {path}")
 
@@ -505,6 +512,9 @@ def main():
             for entry in list(transport.participants):
                 seen_ips.add(entry[1])
                 current_ips.add(entry[1])
+            if left_after_trade(current_ips):
+                print("[sv] the console left after the trade; closing")
+                break
             # The Pia block's player count, not the LDN list, is the session the game sees. A
             # returning station needs the Net 0x11 again.
             net_answered.intersection_update(current_ips)
@@ -608,6 +618,8 @@ def main():
                         continue
                     payload = Path(path).read_bytes()
                     seq = int(name.split(".")[0])
+                    if seq == 1:
+                        payload = reference.named_record(payload, args.trainer_name)
                     flags = (reliable5.FLAG_APPLICATION_DATA | reliable5.FLAG_MESSAGE_START
                              | reliable5.FLAG_MESSAGE_END | reliable5.FLAG_ZLIB
                              | (reliable5.FLAG_IS_INITIALIZED if seq == 1 else 0))
@@ -680,6 +692,21 @@ def main():
                                     net_prop[src_ip][2] = True
                                     print(f"[sv] {src_ip}: acknowledged net 0x50 with 0x51, "
                                           f"seqid={acked}")
+                        # The leaver resends every 500 ms until this, four sends at most
+                        # (`0x6db7b0`); a host answers at `0x6d7894` (docs/sv.md, Leaving).
+                        if (not args.no_leave_response and msg.protocol == PROTO_SESSION
+                                and len(msg.payload) >= 17
+                                and msg.payload[0] == pia_connect.SESSION_LEAVE_REQUEST):
+                            body = pia_connect.build_session_leave_response_v11(
+                                msg.payload, random4=os.urandom(4))
+                            pkt = build_reply(keys, transport.our_ip, body, header.src_var,
+                                              os.urandom(8), flags=session_flags,
+                                              packet_id=args.session_packet_id)
+                            transport.send(pkt, src_ip)
+                            record(rec="out", dst=src_ip, kind="session leave response",
+                                   hex=pkt.hex(), t=time.time())
+                            print(f"[sv] -> {src_ip}: session leave response (type 4); "
+                                  f"the console is leaving")
                         if (msg.protocol == PROTO_SESSION and msg.payload
                                 and msg.payload[0] == SESSION_JOIN_REQUEST):
                             if args.net_property:
@@ -851,10 +878,12 @@ def main():
                                     if st.trades > trades_done.get(src_ip, 0):
                                         trades_done[src_ip] = st.trades
                                         show_done()
+                                        screen.received("sv", (st.joiner_offers or [None])[-1])
                                         if st.done:
                                             print(f"[sv] {src_ip}: TRADE {st.trades} COMPLETE; "
                                                   f"no record left to offer")
                                         else:
+                                            screen.offer("sv", st.offer)
                                             print(f"[sv] {src_ip}: TRADE {st.trades} COMPLETE; "
                                                   f"offering the next record")
                                             if args.offer_after_open is not None \

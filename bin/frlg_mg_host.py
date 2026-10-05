@@ -65,6 +65,9 @@ def build_parser(file_config=None, *, shared_path=None, local_path=None):
         "--gift", choices=gift_registry.GIFT_REGISTRY.live_choices,
         default=GIFT_BEAST_CUTSCENE,
         help=gift_registry.GIFT_REGISTRY.format_live_gift_help())
+    payload_group.add_argument("--gift-file", help="a complete FRLG .pokegift file, or a .wc3 Wonder Card")
+    parser.add_argument("--export-gift", metavar="FILE",
+                        help="save a .pokegift file and exit without using the radio")
     payload_group.add_argument(
         "--news", nargs="?", const=wonder_news.DEFAULT_NEWS, default=None,
         choices=wonder_news.news_choices(), metavar="NAME",
@@ -422,6 +425,12 @@ def build_parser(file_config=None, *, shared_path=None, local_path=None):
               "screen shows."
               % (wonder_card_events.GIFT_RNG_MON_HUNT, ", ".join(native_script.IV_FIELDS))))
     parser.add_argument(
+        "--event-pokemon", metavar="NAME", default=None,
+        help=("with --gift %s: a fresh copy of a Gen 3 distribution, made by PKHeX by that event's\n"
+              "own PID/IV method, e.g. \"WISHMKR Jirachi\", \"10 ANIV Pikachu\", \"Aura Mew\". The\n"
+              "release in --language is preferred. Without it the card sends a stored WISHMKR Jirachi."
+              % wonder_card_events.GIFT_EVENT_POKEMON))
+    parser.add_argument(
         "--hunt-cap", type=lambda v: int(v, 0), default=None, metavar="N",
         help=("with --gift %s: how many states the stub may try before giving up and leaving the\n"
               "rng alone. The default is the smallest cap that finds one %d times in 100."
@@ -550,6 +559,21 @@ def _hunt_asked(args):
                                                args.ram_script_object))
 
 
+def _event_definition(parser, args):
+    """-> the event Pokemon card for --event-pokemon NAME, made now so a bad name fails here."""
+    if args.event_pokemon is None:
+        return None
+    if args.gift != wonder_card_events.GIFT_EVENT_POKEMON:
+        parser.error(f"--event-pokemon belongs to --gift {wonder_card_events.GIFT_EVENT_POKEMON}")
+    from pokeldn.pokemon import SERVICE, BuilderError
+    try:
+        pk3, summary = SERVICE.event(args.event_pokemon, configmod.LANGUAGES.get(args.language, 0))
+    except BuilderError as exc:
+        parser.error(str(exc))
+    print(f"event Pokemon: {summary}")
+    return wonder_card_events.build_event_pokemon_gift(pk3, name=args.event_pokemon)
+
+
 def _hunt_definition(parser, args):
     """-> the card the command line asked for, composed, or None to send the registered one.
     The cost is printed before anything is on the air [native_script.search_cost]."""
@@ -589,7 +613,18 @@ def _hunt_definition(parser, args):
 def build_run_config(parser, args):
     profile, ldn, role = host_cli.build_host_config(parser, args)
     try:
-        if args.news is not None:
+        if args.gift_file:
+            from pokeldn import gifts
+            from pokeldn.frlg.gift.file import FilePayload
+            payload_prefixes = ("dump_", "create_mon_", "write_", "flash_", "scan_", "sum_",
+                                "table_", "trace_", "call_", "chain_", "svc_", "resident", "hunt_")
+            overrides = any(value != parser.get_default(key) for key, value in vars(args).items()
+                            if key != "dump_file" and (key.startswith(payload_prefixes)
+                            or key in ("questionnaire", "denied_message", "news_id")))
+            if overrides or getattr(args, "_flag_id_explicit", False):
+                parser.error("A gift file already defines its card, scripts and options; use it without payload overrides")
+            payload = FilePayload(gifts.load(args.gift_file, game="frlg"), dump_file=args.dump_file)
+        elif args.news is not None:
             if args.questionnaire is not None:
                 parser.error(
                     "--questionnaire gates a Wonder Card session; the News server script has no "
@@ -760,7 +795,7 @@ def build_run_config(parser, args):
             payload = configmod.MysteryGiftPayload(
                 gift=args.gift, flag_id=gift_registry.resolve_flag_id(args),
                 questionnaire=phrase, denied_message=args.denied_message,
-                definition=_hunt_definition(parser, args))
+                definition=_event_definition(parser, args) or _hunt_definition(parser, args))
         return configmod.MysteryGiftRunConfig(
             profile=profile, ldn=ldn, role=role,
             payload=payload, expect_console=args.expect_console,
@@ -774,7 +809,7 @@ def build_run_config(parser, args):
             idle_timeout_seconds=args.idle_timeout,
             attempt_log_dir=args.attempt_log_dir,
             game_data_log=args.game_data_log)
-    except ValueError as exc:
+    except (OSError, ValueError) as exc:
         parser.error(str(exc))
 
 
@@ -792,17 +827,28 @@ def main(argv=None):
         host_cli.build_host_config(parser, args)
         print(host_cli.format_effective_config(args), end="")
         return 0
-    if not args.live:
+    if not args.live and not args.export_gift:
         parser.error("hosting only supports live mode; omit --no-live")
     config = build_run_config(parser, args)
     try:
         plan = configmod.plan_builds(config.payload, config.console_build, config.console_version)
     except ValueError as exc:
         parser.error(str(exc))
+    if args.export_gift:
+        from pokeldn import gifts
+        from pokeldn.frlg.gift.file import from_payload
+        try:
+            gift = from_payload(config.payload, console_build=config.console_build,
+                                version=config.console_version)
+            gifts.save(args.export_gift, gift)
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
+        print(f"Saved {args.export_gift}: {gift.summary}")
+        return 0
     distribution = None
-    if args.make_artifact and args.news is not None:
+    if args.make_artifact and plan.distribution.is_news:
         parser.error("--make-artifact disassembles a delivery RAM script; Wonder News has none")
-    if args.make_artifact and args.buffer_script is not None:
+    if args.make_artifact and plan.distribution.buffer_code is not None:
         parser.error(
             "--make-artifact disassembles a delivery RAM script; a buffer script has none")
     if args.make_artifact:
@@ -811,8 +857,8 @@ def main(argv=None):
                          "build; name it with --console-build")
         distribution = plan.distribution
         # --hunt-* composes its own definition; the registry holds the default one.
-        definition = (config.payload.definition
-                      or gift_registry.GIFT_REGISTRY.entry(args.gift).definition)
+        definition = (config.payload.definition or
+                      (gift_registry.GIFT_REGISTRY.entry(args.gift).definition if not args.gift_file else None))
         try:
             artifact_path = gift_artifact.write_artifact(
                 args.artifact_dir, gift=args.gift, flag_id=config.payload.flag_id,
@@ -828,8 +874,8 @@ def main(argv=None):
         factory.NEEDS_RADIO = False
     elif needs_root():
         parser.error("live LDN hosting requires root; run with sudo -E")
-    application = (WonderNewsHostApplication if args.news is not None
-                   else BufferScriptHostApplication if args.buffer_script is not None
+    application = (WonderNewsHostApplication if plan.distribution.is_news
+                   else BufferScriptHostApplication if plan.distribution.buffer_code is not None
                    else MysteryGiftHostApplication)
     app = application(
         config, plan=plan, transport_factory=factory,

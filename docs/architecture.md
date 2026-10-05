@@ -10,6 +10,7 @@ formats and timing; shared components belong outside a game directory.
 | --- | --- |
 | `pokeldn/app/` | Tool catalog, argument assembly, parser inspection, settings, paths and child processes |
 | `pokeldn/pokemon.py` | PKHeX service, imports, final offer validation and received files |
+| `pokeldn/gifts.py` | Shared [Mystery Gift file](gifts.md) envelope, reader, writer and native conversion |
 | `services/pkhex/` | Pinned PKHeX.Core dependency; legal encounter generation and game compatibility checks |
 | `pokeldn/ldn/` | Radio transport, IP, Pia, reliability and channel tables |
 | `pokeldn/gba/` | GBA wireless link protocols |
@@ -21,6 +22,10 @@ formats and timing; shared components belong outside a game directory.
 FRLG profiles, advertising and gift settings live in `pokeldn/frlg/`. The older configuration and
 codec import paths retain small compatibility shims.
 
+The app runs one session at a time, since one board serves one process. Stop appears only on the tool
+whose session is running; Start on another tool stops that session, waits for it to exit, then
+starts. A flash holds the board too, and Start waits for it.
+
 ## Pokémon preparation
 
 The shared service generates legal encounters and saves imports in the selected game's format.
@@ -30,7 +35,10 @@ illegal final records are refused. A session's trainer identity does not overwri
 Pokémon's original trainer.
 
 PID and encryption-constant changes can invalidate encounter correlations, especially events and
-raids. Fresh identity is opt-in and must pass PKHeX; a fixed event trainer is preserved.
+raids. Fresh identity is opt-in and must pass PKHeX; a fixed event trainer is preserved. A record legal
+as supplied and illegal under a fresh identity keeps its own PID and encryption constant, and the
+launcher logs `the offer kept its own PID`. A build tries Mystery Gift encounters after every other
+encounter of the species, so a species with a wild, static or egg encounter is never built as an event.
 
 A built Pokémon is an encounter converted to a record. Shininess is requested from the encounter, so a
 Generation 3 PID keeps the RNG correlation PKHeX expects. A single-gender species asks for that gender
@@ -49,7 +57,7 @@ first legal result is kept:
 2. Moves, relearn moves, TM and TR record flags, plus-move flags, mastery flags and Legends Arceus size
    are refitted. A suggested moveset holds TM and TR moves that are legal only with their record flags.
 3. An evolved record's ability is refreshed to the evolved species in the slot it was caught with.
-4. A record with no handling trainer receives a second one, `PkCamp`: a trade evolution has been traded,
+4. A record with no handling trainer receives a second one, `POKELDN`: a trade evolution has been traded,
    and some gifts (Magearna in Legends Z-A) arrive already handled.
 5. An evolution that counts something (critical hits, damage taken, Rage Fist uses, coins) starts from
    that count.
@@ -77,13 +85,15 @@ level 50, nickname), plain builds that fail are:
 Every failure but three is a species PKHeX has no encounter for in that game: Celebi and Deoxys in
 Brilliant Diamond/Shining Pearl, Diancie, Magearna and Meltan in Sword/Shield, Scatterbug, Spewpa,
 Vivillon and Zygarde in Legends Z-A, and in Scarlet/Violet the legendaries that arrive only from HOME.
-The three with an encounter are Milotic in Legends Z-A and Wyrdeer and Ursaluna in Scarlet/Violet. PKHeX
-gives Wyrdeer and Ursaluna no Generation 9 evolution. For a Z-A Milotic built from Feebas with a
-handling trainer, PKHeX's evolution chain stops at Milotic; the game's records refuse contest stats.
+The three with an encounter are Milotic in Legends Z-A and Wyrdeer and Ursaluna in Scarlet/Violet.
+PKHeX gives Wyrdeer and Ursaluna no Generation 9 evolution; a Z-A Milotic built from Feebas with a
+handling trainer stops at Milotic in PKHeX's evolution chain, and the game's records refuse contest
+stats.
 
 ### Offer options
 
-A build can also ask for a nature, ability, gender, held item, ball, IVs and effort values. Nature,
+A build can also ask for a form, nature, ability, gender, held item, ball, up to four moves, IVs and
+effort values. Moves and form narrow the encounter search to encounters that can carry them. Nature,
 ability, gender and IVs go into the encounter criteria, so the record is generated with them; a
 Generation 3 PID is searched for the requested nature. When an encounter rolls something else, the
 record is moved to the request the way a player would, and the legality analysis judges the result:
@@ -92,7 +102,8 @@ record is moved to the request the way a player would, and the legality analysis
 |---|---|
 | nature | a mint sets the stat nature, Generation 8 onward |
 | ability | the slot that holds the ability (capsule or patch) |
-| an IV asked to be 31 | hyper training |
+| an IV asked to be 31 | hyper training, at level 100 (Generations 7 and 8) or 50 (Generation 9) |
+| form | set on species whose form the player changes, such as Rotom's appliances |
 
 Held item, ball and effort values are set after the build. A Generation 3 or 4 EV above 100 is legal
 only once the Pokémon has gained experience since it was met, so such a record gets one experience
@@ -117,10 +128,42 @@ fixed effort values, each gender and a held item, 8088 of 8095 builds are legal.
 Docile and Bashful on the Sword/Shield event Celebi, and the same three and Quirky on the Legends Z-A
 gift Melmetal.
 
+On a retail Sword, a Pokemon built with custom options and traded back on the next queued exchange
+saved a record equal to the offer ([The offered record](swsh_trade.md#the-offered-record)). On retail
+Brilliant Diamond and Scarlet, a shiny level 37 Pikachu with a nickname, nature, hidden ability, gender,
+held item, ball, four moves, IVs and effort values showed each option on its summary screen; the
+Brilliant Diamond record traded back matched in all twelve fields.
+
+### Showdown sets
+
+Import paste reads a Pokémon Showdown, Smogon or PKHeX set with PKHeX's own parser
+(`ShowdownParsing.GetShowdownSets`) and fills the build form; Build
+then makes the record. The parser reads a set in any language PKHeX exports (English, French,
+German, Italian, Spanish, Japanese, Korean, Chinese); a hand-typed token outside PKHeX's own
+spelling, such as `Nature Rigide` for `Nature : Rigide`, is a line it cannot read. A team export's
+`=== [gen9] Team ===` header is skipped. The text follows Showdown's defaults: no `Level:` line means level 100, and
+an IV the `IVs:` line leaves out is 31. The parser keeps stats in PKHeX's order, Speed fourth.
+
+| the set names | result |
+|---|---|
+| a line the parser cannot read, a species or form absent from the game, an ability the species lacks, an item the game cannot hold, a move the game lacks, EVs over 510 | refused with the reason; nothing is filled |
+| Tera Type, Gigantamax, Dynamax level, Friendship, Hidden Power type | filled without it, with a note |
+| EVs in Let's Go or Legends Arceus, an ability in Legends Z-A | left out, with a note |
+| several sets, in a trade queue | each fills a trade in order from the picker it was pasted into: an untouched picker after it is reused, otherwise one is inserted, up to the queue's limit; a set that does not fit is counted in a note. A refusal in any set refuses the paste |
+| several sets, outside a queue | the first fills the form, with a note |
+
 Sword/Shield Mystery Gift validates the WC8 seal and checks supported species, forms, moves and safe
 items with PKHeX. Custom WC8 cards are distributions, and this structural check does not make them
 official events. The optional `--image` research check uses a user-supplied game binary; it is not
 required to distribute a card.
+
+### The Let's Go link code
+
+The Let's Go host's code is three slots. A slot opens the console's ten picker Pokemon, two rows of five as on the console, as sprites with
+their names under them, so a sprite that never downloaded still reads; the pick fills the slot and
+opens the next empty one. The value is the three English names, comma-separated, as `--code` takes
+them, and Start waits until all three are set: an empty slot would host under the launcher's default
+code, which the console's search never finds.
 
 ### The trade queue
 
@@ -130,18 +173,40 @@ repeated offer flags:
 
 | tool | offers as | after the last |
 |---|---|---|
-| FireRed/LeafGreen host and join | party files, `--trades N`, slots 0 to N-1 | Cancel and Yes end the link |
-| Let's Go host | `--offer`, then `--next-offer` per later trade | a further trade is not answered |
+| FireRed/LeafGreen host and join | party files, `--trades N`, slots 0 to N-1 | the host declines a further trade (`PLAYER_CANCEL_TRADE`) and waits for the player's Cancel and Yes; the joiner cancels to leave |
+| Let's Go host | `--offer`, then `--next-offer` per later trade | the launcher answers no further trade (`pokeldn/lgpe/trade.py`); the player backs out |
+| Let's Go join | `--offer`, repeated | the launcher answers no further trade; the player backs out |
 | Brilliant Diamond/Shining Pearl host and join | `--offer` / `--trade-template`, repeated | the last is offered again |
 | Legends Arceus host and join | `--trade-box-record` / `--offer`, repeated; the joiner hands the list to the host role | the last is offered again |
-| Scarlet/Violet host and join | `--trade-offer`, repeated | the stage stops answering |
-| Legends Z-A host | `--trade-offer`, repeated; each new record is previewed when its trade starts | the last is offered again, under a new PID with `--fresh-pid` |
+| Scarlet/Violet host and join | `--trade-offer`, repeated | the launcher's trade stage answers no further message (`pokeldn/sv/trade.py`, `done`) |
+| Sword/Shield host and join | `--offer-file`, repeated; each later trade runs from the box on the same session | the last is offered again |
+| Legends Z-A host and join | `--trade-offer`, repeated; each new record is previewed when its trade starts | the last is offered again, under a new PID with `--fresh-pid` |
+
+Every trade launcher calls `pokeldn.ldn.show_done()` once per completed trade, at the step its
+title's table above ends on; it flashes the board's LED and prints `[done] trade N complete`. The
+Session panel's Offering strip counts that line and marks the first N queued Pokemon as traded. The
+Received list cannot stand in for it: some launchers write the console's Pokemon when the console
+picks it, before the trade completes.
 
 `--fresh-pid` gives every queued record its own PID and encryption constant. Trade N above 1 writes
 what it received to the output path with `-N` before the extension (FireRed/LeafGreen: `_tradeN_` and
 the species; Scarlet/Violet: `.N`, counted by distinct offers; Brilliant Diamond/Shining Pearl host:
-`_N`). Let's Go join, Sword/Shield and the Legends Z-A joiner trade once per session and take one
-Pokemon.
+`_N`; Legends Z-A and Sword/Shield: `-N`).
+
+### Ending a run
+
+A trade run ends on its own when the console has left after a trade, so the app's Stop is never
+needed after a session that worked.
+
+| role | ends when |
+|---|---|
+| host, every title | the console has left the network after at least one completed trade (`pokeldn.ldn.left_after_trade`); a console that leaves before any trade may come back, and the host stays up |
+| FireRed/LeafGreen host | the console has left the network, after a trade or not |
+| joiner | the console's host closes its network or hands its role on (FireRed/LeafGreen, Let's Go, Sword/Shield, Brilliant Diamond/Shining Pearl); Scarlet/Violet, Legends Arceus and Legends Z-A search again after a seat that traded nothing, and close after one that did |
+
+The time limit (`--seconds`, `--hold`) still bounds a run whose console never leaves.
+
+Departure measurements and open questions are on each title's Leaving section.
 
 ## Local files and releases
 
@@ -152,8 +217,13 @@ research images and generated build outputs stay local. ROM checksum comparisons
 Settings and prepared offers use the platform's application data folder. `POKELDN_DATA` overrides it
 for isolated runs. Received records use `.pk3`, `.pb7`, `.pk8`, `.pb8`, `.pa8`, `.pk9` or `.pa9`.
 
+Settings exposes manual cleanup through `pokeldn.app.storage`
+([Local storage](gui.md#local-storage)). A scan inventories reclaimable files; deletion uses that
+inventory, rechecks current selections and preserves changed files. Cleanup holds the app's busy
+state, so sessions and flashes cannot start during deletion.
+
 The packer takes tracked runtime files, the published self-contained PKHeX executable and the merged
-radio firmware for ESP32, ESP32-S3 and ESP32-C3. Any missing image stops the build.
+radio firmware for ESP32, ESP32-S3, ESP32-C3 and ESP32-C6. Any missing image stops the build.
 It excludes machine configuration and notes.
 Windows builds keep standard input and output for child-process logs and stop handling, with the
 owned console hidden. PyInstaller's windowed mode removes those streams on Windows.

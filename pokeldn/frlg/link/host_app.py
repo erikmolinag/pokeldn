@@ -15,6 +15,7 @@ from pokeldn.frlg.link.host_beacon import (
 from pokeldn.ldn.host_pia import HostPeerProtocol
 from pokeldn.host_support import resolve_keys
 from pokeldn.ldn import show_done
+from pokeldn.app import screen
 
 
 HOST_CONTROL_POLL_SECONDS = 0.05
@@ -85,6 +86,7 @@ class HostApplication:
         chat_file = getattr(self.options, "chat_file", None)
         self.chat_watcher = ChatFileWatcher(chat_file, log=log) if chat_file else None
         self._saved_commits = 0
+        self._shown_anims = 0
         self._last_trade_state = None
         self._absence_logged = False
         self._absence_since = None
@@ -196,6 +198,17 @@ class HostApplication:
         self.info("Pia nonce mode: " + (
             "native session-wide counter" if self.options.native_nonce_sequence
             else "independent random values"))
+
+    def _trades(self):
+        """True when the activity offers a party entry: a trade, not a battle or a chat."""
+        return (isinstance(self._activity(), host_trade.HostTradeEngine)
+                and not any(getattr(self.options, flag, False)
+                            for flag in ("colosseum", "union_room_battle", "union_room_chat")))
+
+    def _show_screen(self):
+        """What the board's screen shows while hosting: the offer, when the activity is a trade."""
+        if self._trades():
+            trade_runtime.show_offer(self._activity())
 
     def _send_pending(self, datagrams):
         for outbound in datagrams:
@@ -310,9 +323,15 @@ class HostApplication:
                 slots = activity.format_child_slots()
                 if slots:
                     self.info("child slot stream (op x run-length):\n" + slots)
+        if activity.anim_starts > self._shown_anims:
+            self._shown_anims = activity.anim_starts
+            if self._trades():
+                trade_runtime.show_trade_started(activity)
         if activity.commits > self._saved_commits:
             self._saved_commits = activity.commits
             show_done()
+            if self._trades():
+                trade_runtime.show_received(activity)
             self._save_received()
 
     def _save_received(self):
@@ -330,6 +349,7 @@ class HostApplication:
         try:
             link_player = self._build_components()
             self._log_identity(link_player)
+            self._show_screen()
             self.network.start(preflight=not self.options.skip_preflight)
             factory = self.injector_factory
             # The ESP32 access point beacons itself (docs/hardware_esp32.md).
@@ -384,6 +404,7 @@ class HostApplication:
             self.interrupted = True
             self.log("[host] interrupted; shutting down")
         finally:
+            screen.drain()
             if self.injector is not None:
                 self.injector.stop()
             if self.network is not None:

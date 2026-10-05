@@ -2,6 +2,7 @@
 import pytest
 
 from pokeldn import za
+from pokeldn.app import received
 from pokeldn.ldn import crypto, esp32, esp32_sim, esp32_wlan, host_pia, pia_connect, reliable
 from pokeldn.za import host as za_host
 from pokeldn.za import streams
@@ -198,15 +199,19 @@ def test_a_whole_trade_against_a_scripted_joiner(monkeypatch, cancel, queue):
     assert host.console_pick == offer[:-1] + b"\x00"
 
 
-def test_the_joiner_answers_the_hosts_pick_and_not_its_cursor(tmp_path):
+def test_the_joiner_answers_the_hosts_pick_and_not_its_cursor(tmp_path, capsys):
     """`bin/za_join.py` against a scripted host that previews three cursor moves before its pick:
-    the joiner's preview goes out marked 1, and its pick, marked 0, only after the host's pick."""
+    the joiner's preview goes out marked 1, and its pick, marked 0, only after the host's pick. The
+    second queued record is previewed after the trade and picked for the host's next pick."""
     import argparse
 
     import za_join
     offer = bytes.fromhex("0101b90300bc815801") + bytes(344) + b"\x01"
+    second = bytes.fromhex("0101b90300bc815801") + bytes(range(255, 0, -1)) + bytes(89) + b"\x01"
     (tmp_path / "offer.bin").write_bytes(offer)
-    args = argparse.Namespace(game_dir=str(tmp_path), trade_offer=str(tmp_path / "offer.bin"),
+    (tmp_path / "second.bin").write_bytes(second)
+    args = argparse.Namespace(game_dir=str(tmp_path),
+                              trade_offer=[str(tmp_path / "offer.bin"), str(tmp_path / "second.bin")],
                               selection_count=0, offer_out=str(tmp_path / "theirs.pa9"),
                               selection_delay=0.0, selection_period=1.0, offer_delay=1.0)
 
@@ -250,8 +255,178 @@ def test_the_joiner_answers_the_hosts_pick_and_not_its_cursor(tmp_path):
         t += 0.02
         game.pump(HOST_VAR, JOINER_VAR, t)
     assert game.traded_at is not None and abs(game.traded_at - (commit_at + 14.6)) < 0.05
+    assert not game.queue_done
 
     # Back on its box, the host's cursor previews another Pokemon; the file keeps the one it traded.
+    seq += 1
     game.on_message(za_join.GAME_RELIABLE,
-                    reliable.build_reliable(seq + 1, seq + 1, theirs(4, 1), flagsA=reliable.FLAGSA_GBA), t)
+                    reliable.build_reliable(seq, seq, theirs(4, 1), flagsA=reliable.FLAGSA_GBA), t)
     assert za.pokemon.read((tmp_path / "theirs.pa9").read_bytes())["species"] == 3
+    while t < commit_at + 16.0 + za_host.PREVIEW_DELAY:
+        t += 0.02
+        game.pump(HOST_VAR, JOINER_VAR, t)
+    assert offers()[-1] == second[:-1] + bytes([za_host.OFFER_PREVIEW])
+
+    seq += 1
+    game.on_message(za_join.GAME_RELIABLE,
+                    reliable.build_reliable(seq, seq, theirs(4, 0), flagsA=reliable.FLAGSA_GBA), t)
+    for _ in range(200):
+        t += 0.02
+        game.pump(HOST_VAR, JOINER_VAR, t)
+    assert offers()[-1] == second[:-1] + bytes([za_host.OFFER_PICK])
+    seq += 1
+    game.on_message(za_join.GAME_RELIABLE,
+                    reliable.build_reliable(seq, seq, bytes.fromhex("0104b90000"),
+                                            flagsA=reliable.FLAGSA_GBA), t)
+    for _ in range(800):
+        t += 0.02
+        game.pump(HOST_VAR, JOINER_VAR, t)
+    assert game.trades == 2 and game.queue_done
+    assert za.pokemon.read((tmp_path / "theirs-2.pa9").read_bytes())["species"] == 4
+    # the app ticks its queue off by the line each completed trade prints
+    counts = [n for line in capsys.readouterr().out.splitlines()
+              if (n := received.trades_done(line)) is not None]
+    assert counts == [1, 2]
+
+
+def test_the_host_answers_a_leave_as_the_console_reads_it():
+    """A retail joiner leaving sends type 3 every 0.5 s and gives up after four (`0x2557e54`); a
+    host owes the 15-byte type 4 that `0x25474f8` takes: its own location at +5, big-endian."""
+    host = za_host.HostSession(
+        ssid=SSID, our_ip=HOST_IP, our_mac=HOST_MAC, guest_ip=JOINER_IP, code="00000000",
+        identity=bytes(106), identity_tail=bytes(9), selection=bytes(1211), offer=None,
+        host_var=HOST_VAR, clock=lambda: 0.0)
+    joiner = ScriptedJoiner(host)
+    t = joiner.run(0.1, 0.0)
+    joiner.send(pia_connect.PROTO_NET, bytes.fromhex("0112000000000002"), dst=0, now=t)
+    joiner.send(pia_connect.PROTO_SESSION, JOIN, dst=0, now=t)
+    t = joiner.run(t + 0.5, t)
+    # The retail leave's layout (type, random word, location, address type 0, IPv4, port).
+    leave = bytes.fromhex("03b584a8be" "7f00030000020000" "5ad2" "00" "7f000003" "3039")
+    joiner.send(pia_connect.PROTO_SESSION, leave, now=t)
+    joiner.run(t + 0.1, t)
+    answers = [m for _, p, m in joiner.heard if p == pia_connect.PROTO_SESSION and m[:1] == b"\x04"]
+    assert len(answers) == 1 and len(answers[0]) == 0xF
+    assert int.from_bytes(answers[0][5:13], "big") == int.from_bytes(
+        pia_connect.ldn_constant_id(bytes.fromhex("02007f000003")), "big")
+    assert int.from_bytes(answers[0][13:15], "big") == JOINER_VAR
+    assert host.leave_requests == 1
+
+
+# An emulated pair's departure: the host's type 9 naming the joiner, the joiner's type 10, then the
+# host's Net 0x11 sequence 3 and the joiner's 0x12. The host's network closed 0.25 s after its type 9.
+PAIR_START_MIGRATION = bytes.fromhex("097f00020000020000905c007f00000230397f00030000020000b7010001")
+PAIR_MIGRATION_ACK = bytes.fromhex("0a7f00030000020000b7017f00020000020000905c")
+PAIR_NET_STATUS_3 = bytes.fromhex(
+    "0111005800000003905c7f000200000200000000000091a31a6d02000401000000007f00000200000000000000"
+    "00000000003039000100007f000003000000000000000000000000303900ff000000000000000000000000000000"
+    "000000000000ff0000000000000000000000000000000000000000")
+
+
+def run_joiner(monkeypatch, argv, script, answer):
+    """`bin/za_join.py` seated with a scripted host from the emulated pair (0x905c, our id 0xb701):
+    `script` is (seconds, proto, payload) the host sends; `answer(proto, payload)` -> what it sends
+    back to each message of ours. -> (seconds, header, proto, payload) for everything we sent, and
+    the seconds the seat lasted."""
+    import trio
+
+    import za_join
+    our_mac, our_var, pair_host = bytes.fromhex("02007f000003"), 0xB701, 0x905C
+    host_ip, our_ip = "127.0.0.2", "127.0.0.3"
+    pia = crypto.PiaCrypto(SSID, za.GAME_KEY)
+    network = type("N", (), {"our_ip": host_ip})
+    clock = [100.0]
+    start = clock[0]
+    script, heard, inbox = list(script), [], []
+
+    class Clock:
+        @staticmethod
+        def monotonic():
+            return clock[0]
+        time = monotonic
+
+    class Socket:
+        def sendto(self, data, _):
+            decoded, why = host_pia.decode_datagram(data, our_ip, pia)
+            assert decoded is not None, why
+            header, messages = decoded
+            for m in messages:
+                heard.append((clock[0] - start, header, m.proto, m.payload))
+                inbox.extend(answer(m.proto, m.payload))
+
+        def recvfrom(self, _):
+            due = [x for x in script if start + x[0] <= clock[0]]
+            for x in due:
+                script.remove(x)
+                inbox.append((x[1], x[2], our_var))
+            if inbox:
+                proto, payload, dst = inbox.pop(0)
+                data = host_pia.build_messages(network, pia, [(proto, payload)], dst_var=dst,
+                                               src_var=0 if dst == 0 else pair_host,
+                                               footer_var=None if dst == 0 else our_var)
+                return data, (host_ip, za.PIA_PORT)
+            clock[0] += 0.01
+            raise BlockingIOError
+
+        def close(self):
+            pass
+
+    async def sleep(_):
+        await trio.lowlevel.checkpoint()
+
+    monkeypatch.setattr(za_join, "time", Clock)
+    monkeypatch.setattr(za_join, "make_socket", lambda *a: Socket())
+    monkeypatch.setattr(trio, "sleep", sleep)
+    args = za_join.build_parser().parse_args(["--unicast", "--our-var", "0xb701"] + argv)
+    trio.run(za_join.run_session, args, za.session_keys(SSID), host_ip,
+             bytes.fromhex("02007f000002"), our_ip, our_mac, lambda **row: None)
+    return heard, clock[0] - start
+
+
+def test_the_joiner_hands_a_leaving_console_its_acknowledgement(monkeypatch):
+    """A host leaving names us its next host: the pair's own type 10 and 0x12 go back, framed as the
+    reference joiner framed them, and the seat ends once the host is gone. Unanswered, a retail host
+    repeats the type 9 for 5 s (`0x255a91c`) and leaves 11 s after its first."""
+    # A retail host then repeats Net 0x40 every 0.3 s for 4 s (za67); the seat ends on the first.
+    script = [(1.0, pia_connect.PROTO_SESSION, PAIR_START_MIGRATION)]
+    script += [(1.1 + 0.3 * i, pia_connect.PROTO_NET, bytes.fromhex("01400000")) for i in range(14)]
+
+    def answer(proto, payload):
+        if proto == pia_connect.PROTO_SESSION and payload[:1] == b"\x0a":
+            return [(pia_connect.PROTO_NET, PAIR_NET_STATUS_3, 0)]
+        return []
+    heard, lasted = run_joiner(monkeypatch, ["--hold", "30"], script, answer)
+    acks = [h for _, h, p, m in heard if p == pia_connect.PROTO_SESSION and m == PAIR_MIGRATION_ACK]
+    nets = [h for _, h, p, m in heard
+            if p == pia_connect.PROTO_NET and m == bytes.fromhex("0112000000000003")]
+    assert len(acks) == 1 and len(nets) == 1
+    for h in acks + nets:
+        assert (h.dst, h.src, h.pktid, h.footer, h.flags & 0x0F) == (0, 0xB701, 0, 0, 0x02)
+    assert lasted < 1.3                 # on the first 0x40, not on the host's silence or --hold
+    assert not [m for _, _, p, m in heard if p == pia_connect.PROTO_SESSION and m[:1] == b"\x03"]
+
+
+def test_the_leave_request_is_a_retail_consoles():
+    assert za.build_leave_request(bytes.fromhex("eb9b2220f1480000"), 0x2583, "169.254.97.2",
+                                  bytes.fromhex("b584a8be")) == bytes.fromhex(
+        "03b584a8beeb9b2220f1480000258300a9fe61023039")
+
+
+@pytest.mark.parametrize("answered", [True, False])
+def test_the_joiner_leaves_as_a_console_leaves(monkeypatch, answered):
+    """At the end of its hold the joiner sends type 3 to the host, every 0.5 s and at most four
+    times (`0x2558098`), and goes once a type 4 naming it comes back (`0x25474f8`)."""
+    script = [(0.3 * i, pia_connect.PROTO_RTT, bytes(21)) for i in range(1, 12)]
+
+    def answer(proto, payload):
+        if answered and proto == pia_connect.PROTO_SESSION and payload[:1] == b"\x03":
+            return [(pia_connect.PROTO_SESSION, b"\x04" + bytes(4) + payload[5:15], 0xB701)]
+        return []
+    heard, lasted = run_joiner(monkeypatch, ["--hold", "2"], script, answer)
+    leaves = [(t, h, m) for t, h, p, m in heard if p == pia_connect.PROTO_SESSION and m[:1] == b"\x03"]
+    assert len(leaves) == (1 if answered else 4)
+    t, h, m = leaves[0]
+    assert (h.dst, h.src) == (0x905C, 0xB701) and h.footer == 2
+    assert m[5:] == bytes.fromhex("7f00030000020000b701007f0000033039") and len(m) == 22
+    assert [round(b[0] - t, 1) for b in leaves] == [0.0, 0.5, 1.0, 1.5][:len(leaves)]
+    assert lasted < (2.2 if answered else 4.2)

@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json.Nodes;
 using PKHeX.Core;
 using static PKHeX.Core.GameVersion;
@@ -27,9 +28,13 @@ while (Console.ReadLine() is { } line)
             "species" => Species(game),
             "names" => Names(game, (string)request["list"]!),
             "options" => Options(game, request),
+            "gender_ratio" => GenderRatio(game, request),
             "make" => Make(game, request),
+            "paste" => Paste(game, request),
             "check" => Check(game, Convert.FromBase64String((string)request["data"]!), request),
             "gift" => Gift(Convert.FromBase64String((string)request["data"]!)),
+            "events" => Events(),
+            "event" => Event(game, request),
             var other => throw new ArgumentException($"unknown command {other}"),
         };
         reply["ok"] = true;
@@ -48,6 +53,15 @@ JsonObject Species(Game game)
         if (game.Table.IsPresentInGame(s, 0))
             list.Add(new JsonObject { ["id"] = s, ["name"] = strings.specieslist[s] });
     return new JsonObject { ["species"] = list };
+}
+
+JsonObject GenderRatio(Game game, JsonObject request)
+{
+    var species = checked((ushort)(int)request["species"]!);
+    var form = checked((byte)((int?)request["form"] ?? 0));
+    if (!game.Table.IsPresentInGame(species, form))
+        form = 0;
+    return new JsonObject { ["ratio"] = (int)game.Table.GetFormEntry(species, form).Gender };
 }
 
 JsonObject Names(Game game, string list)
@@ -95,11 +109,15 @@ JsonObject Options(Game game, JsonObject request)
     var species = checked((ushort)(int)request["species"]!);
     if (!game.Table.IsPresentInGame(species, 0))
         throw new ArgumentException("This species is absent from the selected game.");
-    var detail = game.Table[species];
+    var form = checked((byte)((int?)request["form"] ?? 0));
+    if (!game.Table.IsPresentInGame(species, form))
+        form = 0;
+    var detail = game.Table.GetFormEntry(species, form);
     var (versions, trainer) = Trainer(game, request);
     // A ball is listed when PKHeX permits it for at least one encounter of the species.
     var blank = game.Blank();
     blank.Species = species;
+    blank.Form = form;
     var permitted = new HashSet<Ball>();
     Span<Ball> found = stackalloc Ball[BallApplicator.MaxBallSpanAlloc];
     foreach (var encounter in EncounterMovesetGenerator.GenerateEncounters(blank, trainer, ReadOnlyMemory<ushort>.Empty, versions).Take(80))
@@ -120,7 +138,7 @@ JsonObject Options(Game game, JsonObject request)
         foreach (var id in Enumerable.Range(0, detail.AbilityCount).Select(detail.GetAbilityAtIndex).Distinct())
         {
             var probe = request.DeepClone().AsObject();
-            probe["options"] = new JsonObject { ["ability"] = id };
+            probe["options"] = new JsonObject { ["ability"] = id, ["form"] = (int)form };
             try
             {
                 Make(game, probe);
@@ -140,8 +158,14 @@ JsonObject Options(Game game, JsonObject request)
         IGanbaru => new JsonObject { ["kind"] = "gvs", ["max"] = GanbaruExtensions.TrueMax },
         _ => new JsonObject { ["kind"] = "evs", ["max"] = EffortValues.Max252, ["total"] = EffortValues.Max510 },
     };
+    var forms = new JsonArray();
+    var formNames = FormConverter.GetFormList(species, strings.types, strings.forms, game.Context);
+    for (byte f = 0; f < game.Table[species].FormCount; f++)
+        if (game.Table.IsPresentInGame(species, f))
+            forms.Add(new JsonObject { ["id"] = f, ["name"] = f < formNames.Length && formNames[f].Length > 0 ? formNames[f] : $"Form {f}" });
     return new JsonObject
     {
+        ["forms"] = forms,
         ["natures"] = natures,
         ["abilities"] = abilities,
         ["gendered"] = !detail.Genderless && !detail.OnlyFemale && !detail.OnlyMale,
@@ -179,11 +203,18 @@ JsonObject Make(Game game, JsonObject request)
     var shiny = (bool?)request["shiny"] ?? false;
     var nickname = (string?)request["nickname"] ?? "";
     var wish = Wish.From(request["options"] as JsonObject);
+    var form = wish.Form ?? 0;
+    if (!game.Table.IsPresentInGame(species, form))
+        throw new ArgumentException("This form is absent from the selected game.");
+    // SetNickname cuts a longer name without saying so; the record would not carry what was asked.
+    if (nickname.Length > game.Blank().MaxStringLengthNickname)
+        throw new ArgumentException($"A nickname is at most {game.Blank().MaxStringLengthNickname} characters in this game.");
     var (versions, trainer) = Trainer(game, request);
     var blank = game.Blank();
     blank.Species = species;
+    blank.Form = form;
     // Encounters are matched on the blank's gender: a female-only Vespiquen comes only from a female Combee.
-    var detail = game.Table[species];
+    var detail = game.Table.GetFormEntry(species, form);
     var gender = detail.OnlyFemale ? Gender.Female : detail.OnlyMale ? Gender.Male
         : detail.Genderless ? Gender.Random : wish.Gender ?? Gender.Random;
     if (gender != Gender.Random)
@@ -193,9 +224,11 @@ JsonObject Make(Game game, JsonObject request)
     var shinyLocked = false;
     // The first encounter that stays legal with the requested level, shininess and nickname wins.
     // The first pass takes encounters as they come; the second lets an evolved Pokemon climb to its evolution level.
+    // Mystery Gifts come last: an event's fixed PID makes the launchers' new-PID offer illegal.
     foreach (var climb in new[] { false, true })
     {
-        foreach (var encounter in EncounterMovesetGenerator.GenerateEncounters(blank, trainer, ReadOnlyMemory<ushort>.Empty, versions).Take(80))
+        foreach (var encounter in EncounterMovesetGenerator.GenerateEncounters(blank, trainer, wish.Moves, versions)
+                     .Take(80).OrderBy(e => e is MysteryGift))
         {
             if (encounter is not IEncounterConvertible convertible)
                 continue;
@@ -240,8 +273,7 @@ JsonObject Make(Game game, JsonObject request)
                 if (detail.Genderless)
                     built.Gender = EntityGender.Genderless;
                 // A Galarian Farfetch'd (form 1) becomes Sirfetch'd, which has only form 0.
-                if (built.Form >= detail.FormCount)
-                    built.Form = 0;
+                built.Form = form < detail.FormCount ? form : (byte)0;
             }
             if (level > 0 && level < built.CurrentLevel)
                 continue;
@@ -252,6 +284,9 @@ JsonObject Make(Game game, JsonObject request)
                 var pk = built.Clone();
                 if (lv > pk.CurrentLevel)
                     pk.CurrentLevel = (byte)lv;
+                // A form the player changes (Rotom's appliances) is caught as another.
+                if (pk.Form != form && FormInfo.IsFormChangeable(species, pk.Form, form, game.Context, pk.Context))
+                    pk.Form = form;
                 if (shiny && !pk.IsShiny)
                     pk.SetIsShiny(true);
                 if (nickname.Length > 0)
@@ -277,7 +312,9 @@ JsonObject Make(Game game, JsonObject request)
             ? $"{name} cannot be lower than level {lowest} in this game."
             : shinyLocked
                 ? $"{name} cannot be shiny in this game."
-                : $"PKHeX has no legal {name} for this game.");
+                : wish.Moves.Length > 1
+                    ? $"No legal {name} in this game can know these moves together."
+                    : $"PKHeX has no legal {name} for this game.");
 }
 
 // Repairs a built record one step at a time, each step on top of the last, and stops at the first that is legal.
@@ -292,26 +329,26 @@ LegalityAnalysis Mend(PKM pk, bool evolved, IEncounterTemplate encounter, ITrain
     if (encounter is MysteryGift && pk is IHomeTrack { HasTracker: false } home)
         repairs.Add(() => home.Tracker = (ulong)Random.Shared.NextInt64(1, long.MaxValue));
     // Moves, relearn moves and move flags depend on the species and level just set.
-    repairs.Add(() => Refit(pk));
+    repairs.Add(() => Refit(pk, wish));
     if (evolved)
         // The ability keeps its slot but names the species it was caught as.
-        repairs.Add(() => { pk.RefreshAbility(pk.AbilityNumber >> 1 & 3); Refit(pk); });
+        repairs.Add(() => { pk.RefreshAbility(pk.AbilityNumber >> 1 & 3); Refit(pk, wish); });
     if (pk.HandlingTrainerName.Length == 0)
         repairs.Add(() =>
         {
             // A trade evolution has been through a trade, and some gifts (Z-A's Magearna) arrive already handled.
             pk.CurrentHandler = 1;
-            pk.HandlingTrainerName = "PkCamp";
+            pk.HandlingTrainerName = "POKELDN";
             pk.HandlingTrainerGender = (byte)(1 - trainer.Gender);
             if (pk is IHandlerLanguage language)
                 language.HandlingTrainerLanguage = (byte)trainer.Language;
-            Refit(pk);
+            Refit(pk, wish);
         });
     if (evolved)
     {
         // Evolutions that count something (critical hits, damage taken, Rage Fist uses, coins) start from that count.
         if (FormArgumentUtil.GetFormArgumentMinEvolution(pk.Species, encounter.Species) is var counted and not 0)
-            repairs.Add(() => { FormArgumentUtil.ChangeFormArgument(pk, counted); Refit(pk); });
+            repairs.Add(() => { FormArgumentUtil.ChangeFormArgument(pk, counted); Refit(pk, wish); });
         // BDSP's Milotic evolves at Beauty 170; poffins that raise Beauty also raise Sheen.
         if (pk is PB8 pb8 && HowEvolved(pk) is { Method: EvolutionType.LevelUpBeauty } beauty)
             repairs.Add(() =>
@@ -362,9 +399,13 @@ LegalityAnalysis Refresh(PKM pk, Wish? wish = null)
     return new LegalityAnalysis(pk);
 }
 
-void Refit(PKM pk)
+void Refit(PKM pk, Wish wish)
 {
-    pk.SetMoveset();
+    // Moves the request names stay; PKHeX suggests the rest.
+    if (wish.Moves.Length > 0)
+        pk.SetMoves(wish.Moveset());
+    else
+        pk.SetMoveset();
     pk.SetRelearnMoves(new LegalityAnalysis(pk));
     // A TM or TR move the suggested moveset holds is legal only with its record flag (Sword/Shield's TRs).
     if (pk is ITechRecord record)
@@ -404,12 +445,21 @@ JsonObject Check(Game game, byte[] data, JsonObject request)
                 default: throw new ArgumentException($"Unsupported edit {name}.");
             }
         }
+    string? note = null;
     if ((bool?)request["fresh"] == true)
     {
+        var (pid, ec) = (pk.PID, pk.EncryptionConstant);
+        var legal = new LegalityAnalysis(pk).Valid;
         var xor = (pk.PID >> 16) ^ (pk.PID & 0xFFFF);
         var high = (uint)Random.Shared.Next(0x10000);
         pk.PID = (high << 16) | (high ^ xor);
         pk.EncryptionConstant = (uint)Random.Shared.NextInt64(1, 1L << 32);
+        // An event Pokemon's PID is part of the event: a new one makes it illegal.
+        if (legal && !new LegalityAnalysis(pk).Valid)
+        {
+            (pk.PID, pk.EncryptionConstant) = (pid, ec);
+            note = "kept its own PID: this event Pokemon is legal only with it";
+        }
     }
     pk.ResetPartyStats();
     pk.RefreshChecksum();
@@ -419,7 +469,184 @@ JsonObject Check(Game game, byte[] data, JsonObject request)
         pb7.ResetPartyStats();
         pb7.ResetCalculatedValues();
     }
-    return Describe(game, pk, new LegalityAnalysis(pk));
+    var reply = Describe(game, pk, new LegalityAnalysis(pk));
+    if (note is not null)
+        reply["note"] = note;
+    return reply;
+}
+
+// A Showdown or Smogon set, read by PKHeX's own parser in any language it knows, as the values `make` takes.
+// A line it cannot read or a choice this game lacks is an error; a value the builder does not set is a note.
+JsonObject Paste(Game game, JsonObject request)
+{
+    var (_, trainer) = Trainer(game, request);
+    // The parser reads item names and forms in the context of the most recent trainer.
+    RecentTrainerCache.SetRecentTrainer(trainer);
+    var lines = ((string)request["text"]!).Replace("\r", "").Split('\n');
+    var sets = new JsonArray();
+    var blank = game.Blank();
+    var dummied = MoveInfo.GetDummiedMovesHashSet(game.Context);
+    var errorText = BattleTemplateParseErrorLocalization.Get();
+    foreach (var set in ShowdownParsing.GetShowdownSets(lines))
+    {
+        var errors = new JsonArray();
+        var notes = new JsonArray();
+        foreach (var invalid in set.InvalidLines)
+            errors.Add(invalid.Humanize(errorText));
+        var species = set.Species;
+        var name = species < strings.specieslist.Length ? strings.specieslist[species] : "";
+        // A team export opens with a "=== [gen9] Team ===" line, read as a set with nothing in it.
+        if (species == 0 && set.InvalidLines.Count == 0)
+            continue;
+        if (species == 0)
+        {
+            errors.Add("The first line names no Pokemon.");
+            sets.Add(new JsonObject { ["errors"] = errors });
+            continue;
+        }
+        if (!game.Table.IsPresentInGame(species, set.Form))
+        {
+            errors.Add(game.Table.IsPresentInGame(species, 0)
+                ? $"{name} has no {set.FormName} form in this game."
+                : $"{name} is not in this game.");
+            sets.Add(new JsonObject { ["species"] = name, ["errors"] = errors });
+            continue;
+        }
+        var detail = game.Table.GetFormEntry(species, set.Form);
+        var options = new JsonObject();
+        if (set.Form != 0)
+            options["form"] = set.Form;
+        if (set.Nature != Nature.Random)
+            options["nature"] = (int)set.Nature;
+        if (set.Ability >= 0)
+        {
+            if (game.Context == EntityContext.Gen9a)
+                notes.Add("Legends Z-A has no abilities; the ability was left out.");
+            else if (Enumerable.Range(0, detail.AbilityCount).All(i => detail.GetAbilityAtIndex(i) != set.Ability))
+                errors.Add($"{name} cannot have {strings.abilitylist[set.Ability]}.");
+            else
+                options["ability"] = set.Ability;
+        }
+        if (set.Gender is { } gender && !detail.Genderless && !detail.OnlyFemale && !detail.OnlyMale)
+            options["gender"] = (int)gender;
+        if (set.HeldItem != 0)
+        {
+            if (!ItemRestrictions.IsHeldItemAllowed(set.HeldItem, game.Context))
+                errors.Add($"{strings.GetItemStrings(game.Context, game.Versions[0])[set.HeldItem]} cannot be held in this game.");
+            else
+                options["held_item"] = set.HeldItem;
+        }
+        var moves = new JsonArray();
+        var moveNames = new JsonArray();
+        foreach (var move in set.Moves)
+        {
+            if (move == 0)
+                continue;
+            if (move > blank.MaxMoveID || MoveInfo.IsDummiedMove(dummied, move))
+                errors.Add($"{strings.movelist[move]} is not in this game.");
+            else
+            {
+                moves.Add(move);
+                moveNames.Add(strings.movelist[move]);
+            }
+        }
+        if (moves.Count > 0)
+            options["moves"] = moves;
+        // The parser keeps stats in PKHeX's order, Speed fourth (H/A/B/S/C/D).
+        string[] stats = ["hp", "atk", "def", "spe", "spa", "spd"];
+        options["ivs"] = new JsonObject(stats.Select((s, i) => KeyValuePair.Create(s, (JsonNode?)set.IVs[i])));
+        if (set.EVs.Any(v => v != 0))
+        {
+            if (blank is IAwakened or IGanbaru)
+                notes.Add("This game has no EVs; the EVs were left out.");
+            else if (set.EVs.Sum() > EffortValues.Max510)
+                errors.Add($"EVs add up to {set.EVs.Sum()}; at most {EffortValues.Max510}.");
+            else
+                options["effort"] = new JsonObject(stats.Select((s, i) => KeyValuePair.Create(s, (JsonNode?)Math.Min(set.EVs[i], EffortValues.Max252))));
+        }
+        if (set.TeraType != MoveType.Any)
+            notes.Add("The Tera Type is not set; the Pokemon keeps its own.");
+        if (set.CanGigantamax || set.DynamaxLevel != 10)
+            notes.Add("Gigantamax and Dynamax level are not set.");
+        if (set.HiddenPowerType >= 0 && blank.Format < 8)
+            notes.Add("Hidden Power follows the IVs; its type is not set.");
+        if (set.Friendship != 255)
+            notes.Add("Friendship is not set.");
+        sets.Add(new JsonObject
+        {
+            ["species"] = name,
+            ["species_id"] = species,
+            ["form"] = set.Form == 0 ? "" : ShowdownParsing.GetStringFromForm(set.Form, strings, species, game.Context),
+            ["nickname"] = set.Nickname,
+            ["level"] = set.Level,
+            ["shiny"] = set.Shiny,
+            ["options"] = options,
+            ["moves"] = moveNames,
+            ["errors"] = errors,
+            ["notes"] = notes,
+        });
+    }
+    if (sets.Count == 0)
+        throw new ArgumentException("The text holds no Pokemon set.");
+    return new JsonObject { ["sets"] = sets };
+}
+
+// PKHeX's Gen 3 event table (internal, read by name: pin the package before renaming it). Japanese
+// distributions are left out: their names do not render on a European cartridge.
+IEnumerable<EncounterGift3> Gen3Events() =>
+    ((EncounterGift3[])typeof(PK3).Assembly.GetType("PKHeX.Core.EncountersWC3")!
+        .GetField("Encounter_WC3", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)!
+        .GetValue(null)!).Where(e => !e.IsEgg && e.Language != (byte)LanguageID.Japanese);
+
+string EventName(EncounterGift3 e) => $"{e.OriginalTrainerName} {strings.specieslist[e.Species]}";
+
+JsonObject Events()
+{
+    var list = new JsonArray();
+    foreach (var e in Gen3Events())
+        list.Add(new JsonObject
+        {
+            ["name"] = EventName(e), ["species"] = e.Species, ["level"] = e.Level,
+            ["language"] = e.Language, ["trainer_id"] = e.TID16,
+        });
+    return new JsonObject { ["events"] = list };
+}
+
+// A fresh copy of one event, made by PKHeX's own PID/IV method for it. `language` picks among the
+// event's language releases (0 takes any); an event released in every language takes it too.
+JsonObject Event(Game game, JsonObject request)
+{
+    var name = (string)request["name"]!;
+    var language = (int?)request["language"] ?? 0;
+    var matches = Gen3Events().Where(e => EventName(e) == name).ToList();
+    if (matches.Count == 0)
+        throw new ArgumentException($"No Gen 3 event is named {name}.");
+    var encounter = matches.FirstOrDefault(e => e.Language == language)
+                    ?? matches.FirstOrDefault(e => e.Language == (byte)LanguageID.English) ?? matches[0];
+    var trainer = new SimpleTrainerInfo(GameVersion.FR)
+    {
+        Language = language is > 0 and <= 7 ? language : (int)LanguageID.English,
+    };
+    // A random roll can land on a PID its own check rejects (seen on 10 ANIV Entei): roll again.
+    PKM pk = null!;
+    LegalityAnalysis la = null!;
+    for (var attempt = 0; attempt < 32; attempt++)
+    {
+        pk = encounter.ConvertToPKM(trainer, EncounterCriteria.Unrestricted);
+        pk.ResetPartyStats();
+        la = new LegalityAnalysis(pk);
+        if (la.Valid)
+            break;
+    }
+    if (!la.Valid)
+        throw new InvalidDataException($"PKHeX made an illegal {name}: {la.Report()}");
+    return new JsonObject
+    {
+        ["data"] = Convert.ToBase64String(game.Write(pk)),
+        ["name"] = name, ["language"] = pk.Language,
+        ["summary"] = $"{strings.specieslist[pk.Species]} Lv{pk.CurrentLevel} {strings.natures[(int)pk.Nature]}, "
+                      + $"OT {pk.OriginalTrainerName} {pk.TID16:00000}, PID {pk.PID:X8}",
+    };
 }
 
 JsonObject Gift(byte[] data)
@@ -442,9 +669,11 @@ JsonObject Gift(byte[] data)
                 throw new InvalidDataException("This move is unavailable in Sword/Shield.");
         if (card.Level > 100 || card.Ball > blank.MaxBallID || !ValidItem(card.HeldItem))
             throw new InvalidDataException("Invalid gift level, ball or held item.");
-        if (data[0x243] > 2 || (data[0x246] > 24 && data[0x246] != 255) ||
+        if (data[0x243] > 3 || (data[0x246] > 24 && data[0x246] != 255) ||
             data[0x247] > 4 || data[0x248] > 4 || data[0x24A] > 10)
             throw new InvalidDataException("Invalid gift gender, nature, ability, shininess or Dynamax level.");
+        if (data[0x24B] > 1 || (data[0x24B] == 1 && !Gigantamax.CanToggle(card.Species, card.Form)))
+            throw new InvalidDataException("This species has no Gigantamax form.");
     }
     else if (card.IsItem)
     {
@@ -452,8 +681,25 @@ JsonObject Gift(byte[] data)
             if (!ValidItem(card.GetItem(i)) || (card.GetItem(i) != 0 && card.GetQuantity(i) is < 1 or > 999))
                 throw new InvalidDataException("Invalid gift item or quantity; bag items only, up to 999.");
     }
+    else if (card.CardType == WC8.GiftType.Clothing)
+    {
+        // Twelve u32 (category, index) pairs from +0x20; the setter 0x0143a450 takes categories 0..14
+        // and indices 0..1023, and the redemption skips index 0xFFFFFFFF (docs/swsh_gift.md).
+        for (var i = 0; i < 12; i++)
+        {
+            var category = BitConverter.ToUInt32(data, 0x20 + 8 * i);
+            var index = BitConverter.ToUInt32(data, 0x24 + 8 * i);
+            if (index != uint.MaxValue && (category > 14 || index > 1023))
+                throw new InvalidDataException("Invalid clothing category or index.");
+        }
+    }
+    else if (data[0x11] == 5)
+    {
+        if (BitConverter.ToUInt32(data, 0x20) is < 1 or > 9_999_999)
+            throw new InvalidDataException("Money is 1 to 9,999,999.");
+    }
     else if (card.CardType != WC8.GiftType.BP)
-        throw new InvalidDataException("Supported WC8 gifts are Pokemon, bag items and BP.");
+        throw new InvalidDataException("Supported WC8 gifts are Pokemon, bag items, BP, clothing and money.");
     return new JsonObject { ["valid"] = true };
 }
 
@@ -469,10 +715,14 @@ JsonObject Describe(Game game, PKM pk, LegalityAnalysis la)
         ["format"] = pk.GetType().Name,
         ["species"] = strings.specieslist[pk.Species],
         ["species_id"] = pk.Species,
+        ["form"] = pk.Form == 0 ? "" : ShowdownParsing.GetStringFromForm(pk.Form, strings, pk.Species, pk.Context),
+        ["form_id"] = pk.Form,
         ["level"] = pk.CurrentLevel,
         ["shiny"] = pk.IsShiny,
         ["nickname"] = pk.Nickname,
         ["ot"] = pk.OriginalTrainerName,
+        ["trainer_id"] = pk.DisplayTID,
+        ["secret_id"] = pk.DisplaySID,
         ["nature"] = strings.natures[(int)pk.StatAlignment],
         ["ball"] = strings.balllist[pk.Ball],
         ["ability"] = game.Context == EntityContext.Gen9a ? "" : strings.abilitylist[pk.Ability],
@@ -506,7 +756,8 @@ static byte[] DecryptedParty(PKM pk)
 }
 
 // The offer options a request asks for; a stat array is HP, Atk, Def, SpA, SpD, Spe and -1 leaves a stat alone.
-record Wish(Nature? Nature, int? Ability, Gender? Gender, int[] IVs, int[] Effort, int? Item, byte? Ball)
+record Wish(Nature? Nature, int? Ability, Gender? Gender, int[] IVs, int[] Effort, int? Item, byte? Ball,
+            byte? Form, ushort[] Moves)
 {
     static readonly string[] Stats = ["hp", "atk", "def", "spa", "spd", "spe"];
     static readonly string[] StatNames = ["HP", "Attack", "Defense", "Sp. Atk", "Sp. Def", "Speed"];
@@ -525,10 +776,17 @@ record Wish(Nature? Nature, int? Ability, Gender? Gender, int[] IVs, int[] Effor
             throw new ArgumentException("An IV is at most 31 and an effort value at most 252.");
         if (Number("nature") is < 0 or > 24)
             throw new ArgumentException("Unknown nature.");
+        ushort[] moves = o?["moves"] is JsonArray list
+            ? [.. list.Select(m => checked((ushort)(int)m!)).Where(m => m != 0).Distinct()] : [];
+        if (moves.Length > 4)
+            throw new ArgumentException("A Pokemon knows at most four moves.");
         return new Wish(Number("nature") is { } n ? (Nature)n : null, Number("ability"),
             Number("gender") is { } g ? (Gender)g : null, ivs, effort,
-            Number("held_item"), Number("ball") is { } b ? checked((byte)b) : null);
+            Number("held_item"), Number("ball") is { } b ? checked((byte)b) : null,
+            Number("form") is { } f ? checked((byte)f) : null, moves);
     }
+
+    public ushort[] Moveset() => [.. Moves, .. new ushort[4 - Moves.Length]];
 
     public EncounterCriteria Criteria(IPersonalInfo detail) => EncounterCriteria.Unrestricted with
     {
@@ -562,10 +820,12 @@ record Wish(Nature? Nature, int? Ability, Gender? Gender, int[] IVs, int[] Effor
                     break;
                 }
         }
-        if (pk is IHyperTrain train)
+        if (pk is IHyperTrain train && train.IsHyperTrainingAvailable() && pk.Context.IsHyperTrainingAvailable(pk.CurrentLevel))
             for (var i = 0; i < 6; i++)
                 if (IVs[i] == 31 && IV(pk, i) != 31 && !train.IsHyperTrained(Battle(i)))
                     train.HyperTrainInvert(Battle(i));
+        if (Moves.Length > 0)
+            pk.SetMoves(Moveset());
         if (Item is { } item)
             pk.HeldItem = item;
         if (Ball is { } ball)
@@ -619,6 +879,11 @@ record Wish(Nature? Nature, int? Ability, Gender? Gender, int[] IVs, int[] Effor
                 return $"{StatNames[i]} IV {IVs[i]}";
         if (Ball is { } ball && pk.Ball != ball)
             return $"a {strings.balllist[ball]}";
+        if (Form is { } form && pk.Form != form)
+            return "this form";
+        foreach (var move in Moves)
+            if (!pk.HasMove(move))
+                return $"the move {strings.movelist[move]}";
         return null;
     }
 

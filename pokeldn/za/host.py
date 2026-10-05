@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 from pokeldn import za
 from pokeldn.ldn import crypto, host_pia, pia_connect, reliable, show_done
+from pokeldn.app import screen
 from pokeldn.ldn.channel_table import TUPLE, decode_uint, encode_uint
 from pokeldn.za import streams
 
@@ -96,6 +97,7 @@ class HostSession:
         self.offer = self.preview = None
         if self.offers:
             self._load_offer(self.offers[0])
+            screen.offer("za", self.offer)
         # Seconds after the preview to make our pick unprompted; None waits for the console's.
         self.offer_at = offer_at
         self.host_var = host_var or int.from_bytes(os.urandom(2), "big") % 0xFFF0 + 0x0002
@@ -136,7 +138,9 @@ class HostSession:
         self.console_pick = None      # the last offer the player chose; a preview is only the cursor
         self.trade_complete = False
         self.trades = 0
+        self.arriving = False         # a trade's animation is running on the console
         self.trade_steps = 0
+        self.leave_requests = 0
         # called on our offer after each trade; a console refuses a PID its save already holds
         self.renew_offer = renew_offer
         self.counts = {}
@@ -232,6 +236,14 @@ class HostSession:
                     if self.offer_at is not None:
                         self.offer_sent = True
                         self._schedule(now, self.offer_at, self.offer, "our offer")
+        elif kind == za.SESSION_LEAVE_REQUEST and len(payload) >= 15:
+            # Unanswered, a console re-sends its leave every 0.5 s and gives up after four (docs/za.md).
+            self.leave_requests += 1
+            self._send([(pia_connect.PROTO_SESSION,
+                         za.build_leave_response(payload, os.urandom(4)), None)],
+                       dst=header.src, note="session leave response")
+            self.log(f"[za-host] the console asked to leave at {self._elapsed(now):.2f}s; answered")
+            self._arrived()
         else:
             self.log(f"[za-host] Session type {kind} ({len(payload)} bytes) at "
                      f"{self._elapsed(now):.2f}s: {payload[:16].hex()}")
@@ -316,6 +328,8 @@ class HostSession:
         if proto != streams.PROTO_RELIABLE:
             return
         if head == MSG_OFFER:
+            # Its first after a trade: back on its box, the animation over (docs/za.md).
+            self._arrived()
             self.console_offers += 1
             self.console_offer = bytes(inner)
             if inner[-1] == OFFER_PICK:
@@ -354,14 +368,26 @@ class HostSession:
                 self.trade_steps = 0
                 self.round = 0      # the next trade in the seat confirms under round 0
                 self.offer_sent = self.confirmed = self.committed = False
+                show_done()
+                screen.received("za", self.console_pick)
+                self.arriving = True
                 if self.trades < len(self.offers):
                     self._load_offer(self.offers[self.trades])
+                    screen.offer("za", self.offer)
                     # A station sends a preview each time its cursor moves to another Pokemon.
                     self._schedule(now, PREVIEW_DELAY, self.preview, "preview offer")
+                    if self.offer_at is not None:
+                        self.offer_sent = True
+                        self._schedule(now, self.offer_at, self.offer, "our offer")
                 elif self.renew_offer and self.offer:
                     self._load_offer(self.renew_offer(self.offer))
-                show_done()
+                    screen.offer("za", self.offer)
                 self.log(f"[za-host] trade_complete: the console sent its four steps (trade {self.trades})")
+
+    def _arrived(self):
+        if self.arriving:
+            self.arriving = False
+            screen.arrived()
 
     def _load_offer(self, offer):
         self.offer = bytes(offer[:-1]) + bytes([OFFER_PICK])

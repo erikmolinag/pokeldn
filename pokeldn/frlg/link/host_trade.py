@@ -203,6 +203,7 @@ class HostTradeEngine:
         self.state_history = [self.state]
         self.round = 0
         self.commits = 0
+        self.anim_starts = 0
         self.received_mons = []
         self.child_link_player = None
         self.child_card = None
@@ -239,7 +240,6 @@ class HostTradeEngine:
         self._leave_menu_wait = None
         self._host_cancel_ready = False
         self._child_cancel_requested = False
-        self._select_cancels = 0
         self._close_retry_wait = self.timing.close_retry_frames
         self._close_confirmed = False
         self._close_grace_wait = None
@@ -422,7 +422,6 @@ class HostTradeEngine:
             self._leave_menu_report = LEAVE_MENU_REPORT_FRAMES
             self.info("Final party refresh complete; waiting 5 seconds for the trade menu.")
         else:
-            self._select_cancels = 0
             self._set_state(H_SELECT)
 
     def _begin_room_exit(self, *, child_already_exited=False):
@@ -556,6 +555,7 @@ class HostTradeEngine:
             self._expected = None
             self._child_finish = False
             self._set_state(H_ANIM)
+            self.anim_starts += 1
             self._anim_wait = self.anim_delay
             self.info("Union Room trade: mail exchanged; the trade animation runs now.")
             return
@@ -919,41 +919,32 @@ class HostTradeEngine:
     def _on_child_linkcmd(self, cmd, cursor):
         self.trace.append(("child_linkcmd", trade.LINKCMD_NAMES.get(cmd, hex(cmd)), cursor))
         if cmd == trade.READY_TO_TRADE and self.state == H_SELECT:
-            self._select_cancels = 0
             self.child_cursor = cursor % 6
             self._set_state(H_CONFIRM)
             self._send_linkcmd(trade.SET_MONS_TO_TRADE, self.offered_slots[self.round])
         elif cmd == trade.INIT_BLOCK and self.state == H_CONFIRM:
             self._set_state(H_ANIM)
+            self.anim_starts += 1
             self._anim_wait = self.anim_delay
             self._send_linkcmd(trade.START_TRADE)
         elif cmd == trade.READY_FINISH_TRADE and self.state == H_ANIM:
             self._child_finish = True
         elif cmd == trade.REQUEST_CANCEL and self.state == H_SELECT:
-            # Partner CANCEL has no state guard [decomp:src/trade.c:1622]. PARTNER_CANCEL_TRADE
-            # [trade.c:1694-1701] every time loops forever, so a second consecutive CANCEL gets
-            # BOTH_CANCEL_TRADE [trade.c:1715-1722].
-            self._select_cancels += 1
-            if self._select_cancels >= 2:
-                self._host_cancel_ready = True
-                self._child_cancel_requested = True
-                self.trace.append(("both_cancel_at_select",))
-                self._enter_cancel_to_leave()
-            else:
-                self._send_linkcmd(trade.PARTNER_CANCEL_TRADE)
-                self.trace.append(("partner_cancel_at_select",))
-                self.info(
-                    "Switch backed out of the trade menu; Linux acknowledged the cancel. "
-                    "The menu is live again - select a Pokemon, or CANCEL again to leave.")
+            # The leader cancels too: BOTH_CANCEL_TRADE [trade.c:1715-1722] ends the session on the
+            # player's first Cancel, as every other title's host lets a player back out at once.
+            self._host_cancel_ready = True
+            self._child_cancel_requested = True
+            self.trace.append(("both_cancel_at_select",))
+            self._enter_cancel_to_leave()
         elif cmd == trade.REQUEST_CANCEL and self.state == H_LEAVE_MENU:
-            # BOTH_CANCEL requires both select statuses CANCEL; the follower's REQUEST_CANCEL comes
-            # first.
+            # The follower sends it from its live menu and waits on "waiting for friend" until
+            # BOTH_CANCEL [trade.c:2049, 1643]; a native leader that chose CANCEL answers at once
+            # [trade.c:1715-1722], so the menu wait no longer applies.
             self._child_cancel_requested = True
             self.trace.append(("child_cancel_requested",))
-            if self._host_cancel_ready:
-                self._enter_cancel_to_leave()
-            else:
-                self.info("Switch requested CANCEL; honoring it after the 5-second menu wait.")
+            self._leave_menu_wait = None
+            self._host_cancel_ready = True
+            self._enter_cancel_to_leave()
         elif cmd in (trade.READY_TO_TRADE, trade.READY_CANCEL_TRADE) \
                 and self.state == H_LEAVE_MENU:
             # Native sends PLAYER_CANCEL when the leader chose CANCEL but the follower picked a mon.
@@ -963,13 +954,19 @@ class HostTradeEngine:
                 "Switch selected another trade; Linux declined it. Dismiss the message, then "
                 "select CANCEL and confirm YES to leave.")
 
+    def incoming_mon(self):
+        """The console's chosen Pokemon, the one `_commit` takes, or None before it chose."""
+        if self.child_cursor is None:
+            return None
+        off = self.child_cursor * monmod.PARTY_MON_SIZE
+        return monmod.Mon(bytes(self.child_party[off:off + monmod.PARTY_MON_SIZE]))
+
     def _commit(self):
         host_slot = self.offered_slots[self.round]
         child_slot = self.child_cursor
-        if child_slot is None:
+        received = self.incoming_mon()
+        if received is None:
             raise RuntimeError("cannot commit without child selection")
-        off = child_slot * monmod.PARTY_MON_SIZE
-        received = monmod.Mon(bytes(self.child_party[off:off + monmod.PARTY_MON_SIZE]))
         self.received_mons.append(received)
         self.party[host_slot] = received
         self.round += 1

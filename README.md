@@ -24,7 +24,7 @@ installed on the Switch or Switch 2. Seven games are supported:
 ✓ works on a retail console · ✗ not done · ∅ the game has no such feature over local wireless
 FRLG FireRed/LeafGreen · LGPE Let's Go Pikachu/Eevee · SwSh Sword/Shield · BDSP Brilliant Diamond/Shining Pearl · PLA Legends Arceus · SV Scarlet/Violet · PLZA Legends Z-A
 
-Every game has completed a trade through the ESP32 board. Protocol documentation:
+Every game trades through the ESP32 board. Protocol documentation:
 [decryptu.github.io/pokeldn](https://decryptu.github.io/pokeldn/).
 
 ---
@@ -37,28 +37,55 @@ parts of the code.
 
 ## Desktop app
 
-<img src=".github/assets/desktop-app.png" alt="The pokeldn desktop app offering a shiny Ditto for a FireRed trade" width="100%">
+<img src=".github/assets/desktop-app.webp" alt="The pokeldn desktop app offering a shiny Chansey for a FireRed trade" width="100%">
 
 The [releases](https://github.com/Decryptu/pokeldn/releases) carry a desktop app for macOS (Apple
 silicon), Windows and Linux. It includes the radio firmware and flashes the board, builds legal
 Pokemon to offer with [PKHeX.Core](https://github.com/kwsch/PKHeX), and runs every trade and Mystery
 Gift below with the tested settings. The only file it asks for is `prod.keys`.
 
-- macOS: the app is unsigned; open it the first time with right-click, Open.
+- macOS: the app is unsigned, so the first launch is blocked. Open it once and close the warning,
+  then System Settings, Privacy & Security, scroll down to Security, Open Anyway next to pokeldn,
+  and confirm with your password. Later launches open normally.
+- Windows: SmartScreen may stop the unsigned app; choose More info, then Run anyway.
 - Linux: it needs GTK 3 and libsecret, present on desktop distributions, and serial access
-  (`sudo usermod -aG dialout $USER`).
+  (`sudo usermod -aG dialout $USER`; the group is `uucp` on Arch). On Ubuntu 22.04, brltty takes
+  CH340 boards and their port never appears: `sudo apt remove brltty` ([Linux serial ports](docs/gui.md#linux-serial-ports)).
 - From source: `pip install -r gui/requirements.txt`, then `python gui/main.py`; the Pokemon builder
-  needs `dotnet build -c Release services/pkhex` (.NET 10 SDK). `python scripts/pack_app.py` builds the
-  app for the current OS into `dist/`, with firmware required. See [desktop builds](docs/gui.md).
+  needs `dotnet build -c Release services/pkhex` (.NET 10 SDK), and file drops need the client
+  `python scripts/build_client.py` builds (Flutter). `python scripts/pack_app.py` builds the
+  app for the current OS into `dist/`, with firmware and that client required. See [desktop builds](docs/gui.md).
 - `python -m pokeldn --list` lists the shared GUI/CLI presets. For example,
   `python -m pokeldn --radio esp32:auto swsh-host --offer-file offer.pk8`.
   See [code organization](docs/architecture.md) for the shared modules and legality checks.
 
+## Mystery Gift files
+
+The FRLG and Sword/Shield Mystery Gift tools send a preset, a gift built in the app, or a shared
+`.pokegift` file; FRLG also accepts `.wc3` and Sword/Shield `.wc8`. FRLG builds Wonder Cards, Wonder News and ARM
+console code; Sword/Shield builds Pokemon (Gigantamax included), eggs, items, clothing, Battle
+Points and money, and offers 171 official event cards, searchable by name. Save gift file exports the selected gift without a board, as a `.pokegift` or a
+native `.wc3` or `.wc8`; `--export-gift FILE.wc3` does the same from the command line.
+
+```bash
+./.venv/bin/python bin/frlg_mg_host.py --gift celebi --export-gift celebi.pokegift
+./.venv/bin/python bin/swsh_gift_host.py --species 25 --export-gift pikachu.pokegift
+./.venv/bin/python bin/frlg_mg_host.py --buffer-script trainer-id-probe --export-gift probe.pokegift
+./.venv/bin/python -m pokeldn.gifts inspect celebi.pokegift
+```
+
+Both launchers accept `--gift-file FILE`. Native conversion and the file schema are in
+[Mystery Gift files](docs/gifts.md).
+
 ## Requirements
 
-- A classic ESP32 board with a USB serial bridge, or an ESP32-S3 or ESP32-C3 through native USB
+- A classic ESP32 board with a USB serial bridge, or an ESP32-S3, ESP32-C3 or ESP32-C6 through native USB
   Serial/JTAG, flashed with [`firmware/esp32`](firmware/esp32) for its chip. All use 2.4 GHz.
   Board requirements and hardware verification are on [ESP32 radio](docs/hardware_esp32.md#supported-boards).
+- Optional: a 128x64 SSD1306 I2C OLED on the board (classic ESP32: SDA D21, SCL D22, VCC 3V3) shows
+  the radio's traffic, the Pokemon each trade sends and receives, and the Mystery Gift card; idle,
+  it dims after a minute and turns off after ten, and BOOT wakes it
+  ([The screen](docs/hardware_esp32.md#the-screen)).
 - Python 3.11+ and a venv with `requirements.txt` installed. No root. The bundled
   [`vendor/LDN`](vendor/LDN) is installed by it; do not substitute the PyPI `ldn` package.
 - Source trade tools also need the .NET 10 SDK and `dotnet build -c Release services/pkhex`.
@@ -69,9 +96,18 @@ Gift below with the tested settings. The only file it asks for is `prod.keys`.
 
 ## Setup
 
+The desktop app flashes the board from its Board page; building the firmware is optional. A copy run
+from source has no image until its Board page's Download the firmware fetches the firmware images
+of the latest release and checks them against its `SHA256SUMS`.
+
+Building it yourself needs ESP-IDF v6.1, which provides `idf.py`; this repository does not ship it:
+
 ```bash
+git clone -b v6.1 --recursive https://github.com/espressif/esp-idf.git ~/esp/esp-idf
+~/esp/esp-idf/install.sh esp32,esp32s3,esp32c3,esp32c6
+. ~/esp/esp-idf/export.sh   # puts idf.py on PATH, once per shell
 cd firmware/esp32
-idf.py set-target esp32   # esp32s3 for an S3, esp32c3 for a C3; ESP-IDF v6.1
+idf.py set-target esp32   # esp32s3, esp32c3 or esp32c6 for those chips
 idf.py build
 idf.py -p PORT flash
 cd ../..
@@ -82,13 +118,11 @@ export POKELDN_RADIO=esp32:auto
 `PORT` is the board's serial device (`/dev/cu.usbserial-*` or `/dev/cu.usbmodem*` on macOS,
 `/dev/ttyUSB*` or `/dev/ttyACM*` on Linux, `COM4` on Windows) and follows the USB socket.
 `esp32:auto` takes the only USB serial port present; `esp32:PORT` names one.
-An S3 or C3 board with two USB sockets needs its native USB socket for radio communication.
+An S3, C3 or C6 board with two USB sockets needs its native USB socket for radio communication.
 `POKELDN_ESP32_TRACE=FILE` records every serial message and the board's counters. The exact IDF
 version is on [ESP32 radio](docs/hardware_esp32.md).
 
-A Linux Wi-Fi card (TP-Link Archer T3U, ALFA AWUS036ACHM, Realtek RTL8821CE) still works as root
-without `POKELDN_RADIO`, with NetworkManager kept off the LDN interfaces; it is no longer developed.
-See [Adapters](docs/hardware_adapters.md).
+A Linux Wi-Fi card (legacy, root, no `POKELDN_RADIO`) is covered on [Adapters](docs/hardware_adapters.md).
 
 ## Layout
 
@@ -123,8 +157,9 @@ it receives to `output.pk3`. Defaults come from `config/host.toml`, then the ign
 2. On the Switch: Direct Corner, Join Group, pick pokeldn's trainer. Wait until the host reports
    that trade selection is active.
 3. Select the Pokémon to trade away and confirm.
-4. After the save sequence returns to the trade menu, wait for the host prompt, then **CANCEL**,
-   **YES**. The room exit and disconnect finish on their own.
+4. The console returns to the trade menu after each trade. `--trades N` (1 to 6) offers party
+   slots 0 to N-1, one per trade, on the same link. After the last trade, wait for the host prompt,
+   then **CANCEL**, **YES**; the room exit and disconnect follow on their own.
 
 | flag | purpose |
 |---|---|
@@ -133,15 +168,16 @@ it receives to `output.pk3`. Defaults come from `config/host.toml`, then the ign
 | `--capture FILE` | JSONL diagnostic capture |
 | `--config` / `--local-config` / `--no-local-config` | replace or disable a config layer |
 | `--ot NAME`, `--version firered\|leafgreen`, `--id TID[:SID]` | per-run trainer overrides (0..65535 each; the LinkPlayer ID is `(SID << 16) \| TID`) |
-| `--verbose` | per-packet output; `--replay` of a capture only, it stalls a live console |
+| `--verbose` | per-packet output, logged synchronously inside the frame-timed loop; use it with `--replay` only |
 
 `DEFAULT_TRAINER` in [`pokeldn/config.py`](pokeldn/config.py) holds the defaults with no flag
 (gender, language, National Dex). The link protocol is in [The link protocol](docs/frlg_link.md).
 
-**Union Room.** `--union-room` advertises on the middle NPC's path; the console takes about ten
-seconds to see itself connected. `--board-type normal` registers the offered Pokémon on the trading
-board, `--union-room-chat` with `--chat-message` / `--chat-file` chats, `--union-room-battle
---battle-fight` battles (the console needs two non-egg Pokémon at level 30 or lower).
+**Union Room.** `--union-room` advertises on the middle NPC's path; the console shows itself
+connected after the keepalive wait, about 10 s ([The link protocol](docs/frlg_link.md)). A Union
+Room link carries one trade, then the console returns to the field (`union_room.c:1744`).
+`--board-type normal` registers the offered Pokémon on the trading board, `--union-room-chat` with
+`--chat-message` / `--chat-file` chats, `--union-room-battle --battle-fight` battles (the console needs two non-egg Pokémon at level 30 or lower).
 
 ```bash
 ./.venv/bin/python bin/frlg_trade_host.py --union-room --union-room-keepalive 120 PARTY1.pk3 PARTY2.pk3
@@ -171,7 +207,7 @@ news only if it differs from what it holds; `--news-id N` forces a new one.
 live save back (secret ID, every party Pokémon's PID, IVs and nature); nothing is written.
 `flash-patch` edits one field: it reads the save sector, changes only the named bytes, recomputes the
 checksum, writes the sector back and bumps a counter so the game loads it. It edits a real save; read
-[A RAM snapshot is not a save](docs/frlg_rom.md) first. Payloads: [Code on the console](docs/frlg_rom.md).
+[Composing a sector from a RAM snapshot](docs/frlg_rom.md#composing-a-sector-from-a-ram-snapshot) first. Payloads: [Code on the console](docs/frlg_rom.md).
 
 ```bash
 ./.venv/bin/python -u bin/frlg_mg_host.py --buffer-script save-dump --dump-block sav2 --dump-size 64 --dump-file dump.bin
@@ -185,14 +221,17 @@ checksum, writes the sector back and bumps a counter so the game loads it. It ed
 The trade screen alternates hosting and scanning, so pokeldn can host or join. Both send a kind-1
 identity message: the joiner the one `pokeldn.lgpe.reference` ships, the host the console's own back
 (`--first echo`) or a file. Both offer a 232-byte PB7 (`pokeldn.lgpe.pb7`; `--offer echo` returns the
-console's own).
+console's own). The host's `--next-offer` and the joiner's repeated `--offer` queue one record per
+later trade on the same seat. The joiner's `--leave-after S` backs out S seconds after it answers
+the first trade step, the way a player leaves the trade screen; without it the seat stays up for
+later trades.
 
 ```bash
-./.venv/bin/python bin/lgpe_host.py --seconds 600 --player-name PkCamp \
+./.venv/bin/python bin/lgpe_host.py --seconds 600 --player-name POKELDN \
   --first echo --our-trainer 41234:12345 --offer offer.pb7
 ./.venv/bin/python bin/lgpe_join.py --connect --connect-seconds 300 \
   --ack-peer-clock --ack-re-announce \
-  --our-trainer 41234:12345 --offer offer.pb7 --leave-after 15
+  --our-trainer 41234:12345 --offer offer.pb7
 ```
 
 Console: Communiquer, Communication locale, Échange, link code Pikachu ×3, wait on the search
@@ -205,7 +244,8 @@ Console: Y-Comm → Link Trade → local communication, A on both messages, wait
 ```bash
 # join the console's session and trade: the console's own party snapshot is sent back, rewritten
 POKELDN_RADIO=esp32:auto ./.venv/bin/python bin/swsh_connect.py --keys PROD_KEYS \
-  --preset trade --offer-slot 1 [--offer-file your.pk8]
+  --preset trade --offer-slot 1 [--offer-file your.pk8 --offer-file next.pk8 --fresh-pid] \
+  --save-offered received.pk8
 
 # or host, and let the console join: its snapshot is taken from this trade
 POKELDN_RADIO=esp32:auto ./.venv/bin/python bin/swsh_host.py --keys PROD_KEYS \
@@ -215,15 +255,16 @@ POKELDN_RADIO=esp32:auto ./.venv/bin/python bin/swsh_host.py --keys PROD_KEYS \
 The host builds its own station advertisement and rewrites the joining console's live snapshot.
 When hosting, the console joins from Y-Comm → Link Trade → trade, after A on both messages that
 follow; `--received FILE` saves what it sends, `--code 12345678` hosts for a Link Code search.
-`--advert` and `--snapshot` still accept saved records for comparison. Details:
-[Trading](docs/swsh_trade.md).
+`--advert` and `--snapshot` still accept saved records for comparison. The host and the joiner
+take a repeated `--offer-file`, one per trade on the session, as the player picks again from the box;
+trade N writes what it received with `-N`. Details: [Trading](docs/swsh_trade.md).
 
 Mystery Gift needs no session; the gift screen scans and a distributor advertises the card. Console:
 Mystery Gift → receive a gift → via local wireless.
 
 ```bash
 ./.venv/bin/python bin/swsh_gift_host.py --species 25 --level 25 \
-  --move1 84 --move2 45 --move3 86 --move4 98 --nickname PKCAMP --ot POKELDN --seconds 300
+  --move1 84 --move2 45 --move3 86 --move4 98 --nickname POKELDN --ot POKELDN --seconds 300
 ./.venv/bin/python bin/swsh_gift_host.py --record card.wc8 --seconds 300
 ```
 
@@ -242,13 +283,16 @@ walls.
 ./.venv/bin/python tools/ldn/ldn_scan.py --channels 1,6,11 --dwell 0.8      # see the session
 ./.venv/bin/python bin/bdsp_connect.py --channels 1,6,11 --count 9 --connect 5 --join 6 \
   --hold 420 --reliable-ack --reliable-sweep 3 --room-walk 15 --room-pattern fixed \
-  --room-walk-steps 8 --join-avatar 0 --answer-requests --state 0 --recruiting 0 \
+  --room-walk-steps 0 --join-avatar 0 --answer-requests --state 0 --recruiting 0 \
   --answer-talk --can-talk 0 --initiate-talk --initiate-delay 3 \
   --after-approach 0x06:0001000000 --trade-reply --complete-trade \
-  --trade-template offer.pb8 --trade-nickname PKCAMP --src-var 0x2B7F4C12
+  --trade-template offer.pb8 --trade-nickname POKELDN --src-var 0x2B7F4C12
 ```
 
-A join lands about one attempt in eight; `--room-pattern fixed` bursts fifteen. Use a fresh
+Association can fail (`Connect failed with status code 1`); retry the run before diagnosing
+([Session](docs/bdsp_session.md)). `--room-pattern fixed` sends joins until the console asks for the
+character's state, at most `--room-walk` (15 above). A repeated `--trade-template` queues one
+Pokémon per trade in the session; the last is offered again. Use a fresh
 `--src-var` every run (the console keeps ids it has seen), and after a hand-stopped run the player
 leaves and re-enters the room. `--complete-trade` lets the console write its save; without it the
 trade stops at the last confirmation. Once the character has appeared and finished walking: Y →
@@ -258,50 +302,56 @@ To host instead, start the host first, then the player enters the room the same 
 trade emote (Y → communication menu → trade Pokémon):
 
 ```bash
-./.venv/bin/python bin/bdsp_host.py --offer offer.pb8 --complete-trade --capture bh01.jsonl
+./.venv/bin/python bin/bdsp_host.py --offer offer.pb8 --complete-trade --capture host.jsonl
 ```
 
-`--offer` must be a legal PB8 whose PID the save does not hold. `--password 00000000` hosts a room
+`--offer` must be a legal PB8 whose PID the save does not hold; repeated, it queues one per trade,
+the last offered again. `--password 00000000` hosts a room
 entered with that password. See [Brilliant Diamond and Shining Pearl](docs/bdsp.md).
 
 ### Legends Arceus
 
-The trade screen registers its protocols only while it hosts, so pokeldn hosts and the console joins by
-link code.
+A console hosting a trade runs it with the station that joins, or hands that station the host role
+when the join lands late ([Legends Arceus](docs/pla.md)). `bin/pla_host.py` hosts and the console
+joins by link code; `bin/pla_join.py` joins the console's search, trades one repeated `--offer` per
+trade on the seat, and takes the host role when it is handed.
 
 ```bash
 ./.venv/bin/python bin/pla_host.py --code 00000000 --channel 6 --seconds 1800 \
   --session-update --sustain --clock --data-exchange --data-exchange-name POKELDN \
   --data-exchange-id 11223344 --game-channel --trade-box --trade-box-record offer.pa8 \
-  --trade-box-collect records/
+  --offer-out received.pa8
 ./.venv/bin/python bin/pla_host.py --ip-host --our-ip 172.16.86.128 --code 00000000 ...   # emulated console, no radio
 ```
 
 Console: Simona at Jubilife Village → trade → someone nearby → the same eight-digit code, offer a
-Pokémon and confirm. The host re-reads its record file between offers and writes each record the console
-shows to `--trade-box-collect`. `pokeldn.pla.pokemon` reads, writes and `build`s a record from 376
+Pokémon and confirm. The host re-reads its record file between offers and writes the record the console
+traded to `--offer-out` (`-2` and on for later trades); `--trade-box-collect DIR` keeps every record
+the console shows or offers, its cursor included. A repeated `--trade-box-record` queues one record per trade in the
+session, the last offered again. `pokeldn.pla.pokemon` reads, writes and `build`s a record from 376
 zero bytes; `pokeldn.pla.stats` computes stats and size. See [Legends Arceus](docs/pla.md).
 
 ### Scarlet and Violet
 
-The offline Link Trade search alternates scanning and hosting, so pokeldn hosts and the console joins.
+The offline Link Trade search alternates scanning and hosting, so pokeldn hosts (`bin/sv_host.py`) or
+joins (`bin/sv_join.py`).
 
 ```bash
-./.venv/bin/python bin/sv_host.py --seconds 240 --player-name RyuPlayer \
+./.venv/bin/python bin/sv_host.py --seconds 240 --player-name POKELDN \
   --rtt-probe --net-property --clock --net-stations 4 --scarlet-response \
   --record-delay 0.17 --announce --announce-delay 5.25 \
   --send-at 6.00:0x7c:1:b90101b902b90280800001 \
   --trade-offer offer.hex --offer-after-open 8
 ```
 
-Console: X → Poké Portal → Link Trade → offline, no code → search. The wire-level requirements
+Console: X → Poké Portal → Link Trade → offline, no code → search. A repeated `--trade-offer`
+offers one record per trade in the same seat. The wire-level requirements
 (identity message order, acknowledgement `lowest_pending`) are in [Scarlet and Violet](docs/sv.md).
 
 ### Legends Z-A
 
 The Link Trade search alternates hosting and scanning, so pokeldn joins or hosts. Console: Link Trade →
-local communication → search with code 00000000. The board usually seats on the first scan and the
-joiner rescans until one seats.
+local communication → search with code 00000000. The joiner rescans until it takes a seat.
 
 ```bash
 # host: start it first, then search on the console
@@ -312,7 +362,8 @@ POKELDN_RADIO=esp32:auto ./.venv/bin/python -u bin/za_host.py --keys prod.keys -
 ```
 
 Pick a Pokémon on the trade box and confirm when the other side's shows. Both roles answer another
-offer in the same session. Back out with B when finished; the host closes when the console leaves.
+offer in the same session; a repeated `--trade-offer` queues records, one per trade. Back out with
+B when finished; the host closes when the console leaves.
 `--offer-out FILE` keeps what the console offered. For an emulated console over the LAN, use
 `za_host.py --ip-host --our-ip IP --comm-id ffffffffffffffff` and
 `za_join.py --ip-join --host-ip IP --our-ip IP --comm-id ffffffffffffffff`. The offer file is 354 bytes
@@ -333,7 +384,17 @@ because Z-A's layout is Scarlet's. See [Legends Z-A](docs/za.md).
   and the [NintendoClients wiki](https://github.com/kinnay/NintendoClients/wiki)
 - [pokefirered](https://github.com/pret/pokefirered): decompilation of FireRed/LeafGreen, including
   the Switch port
+- [GB-Link Team](https://github.com/GB-Link/GB-Link-Switch-LDN): the custom FireRed/LeafGreen Wonder
+  Cards in `vendor/gblink-cards/` (GPL-3.0)
 
 ## License
 
-AGPLv3
+The code is licensed under AGPLv3. The license covers this repository's code and nothing else.
+
+pokeldn is an unofficial fan project. It is not affiliated with, endorsed by or sponsored by
+Nintendo, The Pokemon Company, Game Freak or Creatures. Pokemon, Nintendo Switch and the related
+names and characters are trademarks of their owners. Under section 7(e) of the AGPL, no right to
+use those trademarks or any other Pokemon intellectual property is granted.
+
+The authors do not endorse using pokeldn for commercial, promotional or branded events, including
+Mystery Gift distributions. Anyone who does so is responsible for obtaining the rights it requires.

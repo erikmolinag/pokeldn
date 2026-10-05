@@ -7,7 +7,7 @@ from typing import Callable
 
 import flet as ft
 
-from gui import theme as t
+from gui import drop, theme as t
 
 
 class PixelActivity(ft.Container):
@@ -47,7 +47,7 @@ class CodeBlock:
                          padding=ft.Padding(0, 6, 0, 6)),
             t.icon_button("copy", self._copy, "Copy code"),
         ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.START),
-            bgcolor=t.BG, border_radius=8, padding=10, border=ft.Border.all(1, t.BORDER))
+            bgcolor=t.BG, border_radius=10, padding=10)
 
     async def _copy(self, e) -> None:
         await self.app.copy(self.text.value)
@@ -86,16 +86,16 @@ class MarkdownDocument:
             value, selectable=True, extension_set=ft.MarkdownExtensionSet.GITHUB_WEB,
             code_theme=ft.MarkdownCodeTheme.ATOM_ONE_DARK, on_tap_link=self.on_link,
             md_style_sheet=ft.MarkdownStyleSheet(
-                p_text_style=ft.TextStyle(size=14, color="#D4D6DB", height=1.55),
-                h1_text_style=ft.TextStyle(size=26, weight=ft.FontWeight.W_700, color=t.TEXT),
+                p_text_style=ft.TextStyle(size=14, color=t.SOFT, height=1.55),
+                h1_text_style=ft.TextStyle(size=26, weight=ft.FontWeight.W_600, color=t.TEXT),
                 h2_text_style=ft.TextStyle(size=19, weight=ft.FontWeight.W_600, color=t.TEXT),
                 h3_text_style=ft.TextStyle(size=16, weight=ft.FontWeight.W_600, color=t.TEXT),
                 a_text_style=ft.TextStyle(color=t.BLUE),
-                code_text_style=ft.TextStyle(font_family=t.MONO, size=12.5, color=t.TEXT, bgcolor=t.FIELD),
-                codeblock_decoration=ft.BoxDecoration(bgcolor=t.BG, border_radius=8),
+                code_text_style=ft.TextStyle(font_family=t.MONO, size=12, color=t.TEXT, bgcolor=t.FIELD),
+                codeblock_decoration=ft.BoxDecoration(bgcolor=t.BG, border_radius=10),
                 codeblock_padding=0,
                 table_head_text_style=ft.TextStyle(size=13, weight=ft.FontWeight.W_600, color=t.TEXT),
-                table_body_text_style=ft.TextStyle(size=13, color="#D4D6DB"),
+                table_body_text_style=ft.TextStyle(size=13, color=t.SOFT),
                 table_cells_padding=ft.Padding(8, 6, 8, 6),
                 block_spacing=14,
             ))
@@ -104,7 +104,12 @@ class MarkdownDocument:
 def on_ui(page: ft.Page, fn: Callable[[], None]) -> None:
     """Runs fn on the page's event loop; control updates are not safe from worker threads."""
     async def call():
-        fn()
+        try:
+            fn()
+        except RuntimeError as error:
+            # A worker that answers after its view was replaced (another tool picked) updates nothing.
+            if "must be added to the page" not in str(error):
+                raise
     page.run_task(call)
 
 
@@ -121,18 +126,18 @@ class Log:
         self.flush_scheduled = False
         self.list = ft.ListView(expand=True, spacing=1, auto_scroll=True, padding=ft.Padding(12, 10, 12, 10))
         self.placeholder = t.text(placeholder, 12, t.FAINT)
-        self.control = ft.Container(ft.Stack([self.list, ft.Container(self.placeholder, padding=12)],
+        self.control = ft.Container(ft.Stack([t.fade(self.list, 16), ft.Container(self.placeholder, padding=12)],
                                              expand=True),
-                                    expand=True, bgcolor=t.BG, border_radius=10,
-                                    border=ft.Border.all(1, t.BORDER))
+                                    expand=True, bgcolor=ft.Colors.with_opacity(0.45, "#000000"),
+                                    border_radius=12)
 
     @staticmethod
     def _line(line: str) -> ft.Text:
         lower = line.lower()
         color = t.RED if ("traceback" in lower or "error" in lower or "failed" in lower) else \
             t.GREEN if ("complete" in lower or "success" in lower) else \
-            t.BLUE if line.startswith("[app]") else "#B9BCC4"
-        return ft.Text(line, size=11.5, color=color, font_family=t.MONO, selectable=True)
+            t.BLUE if line.startswith("[app]") else t.SOFT
+        return ft.Text(line, size=11, color=color, font_family=t.MONO, selectable=True)
 
     def add(self, line: str) -> None:
         with self.lock:
@@ -165,12 +170,30 @@ class PathField:
     """A path text field with a browse button, for a file or a folder."""
 
     def __init__(self, picker: ft.FilePicker, start_dir: Callable[[], str], value: str = "",
-                 mode: str = "file", exts: tuple = (), on_change: Callable[[str], None] | None = None):
+                 mode: str = "file", exts: tuple = (), on_change: Callable[[str], None] | None = None,
+                 *, single_line: bool = False, droppable: bool = True):
+        """`droppable=False` leaves file drops to an enclosing target."""
         self.picker, self.start_dir, self.mode, self.exts = picker, start_dir, mode, exts
         self.on_change = on_change
-        self.field = t.field(value=value, mono=True, expand=True, on_change=lambda e: self._changed(e.control.value))
+        # A single-line field does not fill its height; the padding brings it to the button row's 34 px.
+        options = {"height": t.CONTROL_HEIGHT, "fit_parent_size": False, "max_lines": 1, "multiline": False,
+                   "content_padding": ft.Padding(12, 11, 12, 11)} if single_line else {}
+        self.field = t.field(value=value, mono=True, expand=True,
+                             on_change=lambda e: self._changed(e.control.value), **options)
         icon = "folder" if mode == "dir" else "file"
-        self.control = ft.Row([self.field, t.icon_button(icon, self._browse, "Browse")], spacing=6)
+        row = ft.Row([self.field, t.icon_button(icon, self._browse, "Browse")], spacing=6,
+                     vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        self.control = (drop.target(ft.Container(row, border_radius=t.CONTROL_RADIUS), self._dropped)
+                        if droppable else row)
+
+    def _dropped(self, paths: list[str]) -> None:
+        """The first dropped file this field takes; a folder field takes a file's folder."""
+        if self.mode == "dir":
+            path = next((p if os.path.isdir(p) else os.path.dirname(p) for p in paths), "")
+        else:
+            path = next((p for p in paths if not self.exts or drop.suffix(p) in self.exts), "")
+        if path:
+            self.set(path)
 
     def _changed(self, value: str) -> None:
         if self.on_change:
@@ -187,9 +210,12 @@ class PathField:
                 file_type=ft.FilePickerFileType.CUSTOM if self.exts else ft.FilePickerFileType.ANY)
             path = files[0].path if files else None
         if path:
-            self.field.value = path
-            self.field.update()
-            self._changed(path)
+            self.set(path)
+
+    def set(self, path: str) -> None:
+        self.field.value = path
+        self.field.update()
+        self._changed(path)
 
 
 def open_folder(path: str) -> None:

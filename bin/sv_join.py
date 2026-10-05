@@ -37,7 +37,8 @@ from pokeldn.sv import pokemon, port2, reference, streams, trade
 from pokeldn.ldn import game_channel
 from pokeldn.ldn.transport import board_radio, find_ap_phy
 from pokeldn.host_support import resolve_keys, needs_root
-from pokeldn.ldn import show_done
+from pokeldn.ldn import show_done, trades_done
+from pokeldn.app import screen
 
 PROTO_NET = 0x2C
 PROTO_RTT = 0x58
@@ -54,6 +55,8 @@ NET_CONN_STATUS_ACK = 0x12
 # Net 0x50 and the joiner's 0x51 answer (docs/sv.md).
 NET_0x50 = 0x50
 NET_0x51 = 0x51
+# Sent only by NetDestroyNetworkJob (`0x69d310` from `0x6aca54`), every 0.3 s until every client has
+# left the LDN network or 4 s pass (`0x6acac8`; docs/sv.md, Leaving).
 ESTABLISHING_FLAGS = pia6.MESSAGE_FLAG_SKIP_SOURCE_CHECK
 # Fallback only: a retail host names the joiner's id in the footer of its first mesh-addressed
 # packet, and the joiner takes it (docs/sv.md).
@@ -236,7 +239,7 @@ def build_parser():
     ap.add_argument("--seconds", type=float, default=600.0, help="how long to keep trying")
     ap.add_argument("--hold", type=float, default=60.0,
                     help="how long to stay in one joined session before scanning again")
-    ap.add_argument("--name", default="PkCamp", help="the LDN node name we publish")
+    ap.add_argument("--name", default="POKELDN", help="the LDN node name we publish")
     ap.add_argument("--platform", type=int, default=sv.PLATFORM,
                     help="the station platform byte we publish; 1 is what a Switch 2 sends")
     ap.add_argument("--mac", default=None,
@@ -269,6 +272,8 @@ def build_parser():
                          "writes one from a station's own log, so a whole real identity can be "
                          "replayed rather than the host's mirrored back; by default the recorded "
                          "set in pokeldn.sv.reference")
+    ap.add_argument("--trainer-name", default="POKELDN",
+                    help="the player name record 1 of our identity carries, the one the trade screen shows")
     ap.add_argument("--no-identity", action="store_true",
                     help="send no station identity unless --record-set or --send-on-open names "
                          "one; by default the recorded one in pokeldn.sv.reference")
@@ -328,20 +333,31 @@ def build_parser():
                          "for the whole --hold")
     ap.add_argument("--leave-on-migration", type=float, default=None, metavar="SECONDS",
                     help="end the seat this many seconds after the console asks us to take the "
-                         "host role, and go back to scanning. A console that sends Session type 7 "
-                         "was seated late in its five-second host phase and sends nothing but "
-                         "NetStartHostMigration afterwards, so the seat is spent; without this "
-                         "the run holds it for the whole --hold")
+                         "host role (Session type 7), and go back to scanning. A console that sent "
+                         "it sent nothing but NetStartHostMigration afterwards in the seats "
+                         "measured; without this the run holds the seat for the whole --hold")
+    ap.add_argument("--stay-on-host-migration", action="store_true",
+                    help="hold the seat after the console's NetStartHostMigration (Net 0x40). By "
+                         "default the joiner leaves on the first one: the console is destroying "
+                         "its network and resends it until every client has left, for up to 4 s")
     ap.add_argument("--announce-timeout", type=float, default=None, metavar="SECONDS",
                     help="end a seat whose console has not announced on 0x80 port 2 this many "
                          "seconds after the seat, and go back to scanning. A seat can carry every "
                          "stream to completion and never be announced (docs/sv.md, Unresolved); "
                          "board seats that traded announced at 5.8 and 7.7 s")
+    ap.add_argument("--take-host", action=argparse.BooleanOptionalAction, default=True,
+                    help="when the console hands us the host role before the announcement (not a player leaving), leave "
+                         "its network and become the host with bin/sv_host.py on the same channel "
+                         "and code, as bin/pla_join.py does; needs --answer-migration")
     ap.add_argument("--answer-migration", action="store_true",
                     help="answer the host's type-7 leave-with-host-migration with a type-8 ack, "
                          "telling it we accept the host role it is handing over")
     ap.add_argument("--no-update-ack", action="store_true",
                     help="do not answer a Session type-5 station update with the type 6")
+    ap.add_argument("--join-delay", type=float, default=0.0, metavar="SECONDS",
+                    help="hold the Session join request this long after the seat. A console whose "
+                         "WaitMember (3 to 4 s) ends unjoined leaves with host migration, so a join "
+                         "accepted in its leave wait draws the type 7 (docs/sv.md, What decides a seat)")
     ap.add_argument("--join-repeat", type=float, default=2.0,
                     help="with --session-join, re-send it every N seconds (0 sends it once)")
     ap.add_argument("--join-player-id", default="arceus",
@@ -470,6 +486,7 @@ def main(argv=None):
 
     deadline = time.time() + args.seconds
     scans = seats = 0
+    take = None
     try:
         while time.time() < deadline:
             scans += 1
@@ -534,8 +551,10 @@ def main(argv=None):
                         record(rec="seat", ssid=info.ssid.hex(), host_ip=host_ip,
                                host_mac=host_mac.hex(), our_ip=our_ip, our_mac=our_mac.hex(),
                                t=time.time())
-                        await run_session(args, keys, host_ip, host_mac, our_ip, our_mac, record)
+                        outcome.update(await run_session(args, keys, host_ip, host_mac,
+                                                         our_ip, our_mac, record))
 
+            outcome = {}
             try:
                 trio.run(seat)
                 seats += 1
@@ -547,13 +566,47 @@ def main(argv=None):
                 detail = "; ".join(f"{type(e).__name__}: {e}" for e in leaves(exc))
                 print(f"[sv] the seat ended: {detail}")
                 record(rec="seat_failed", detail=detail, t=time.time())
+            if trades_done():
+                print("[sv] the seat ended after a trade; closing")
+                break
+            if args.take_host and outcome.get("handed"):
+                take = (target.channel, deadline - time.time())
+                break
     except KeyboardInterrupt:
         print("\n[sv] interrupted")
     finally:
         if cap:
             cap.close()
     print(f"[sv] {scans} scan(s), {seats} seat(s)")
+    if take:
+        argv = host_argv(args, *take)
+        print("[sv] *** TAKING THE HOST ROLE *** " + " ".join(argv[2:]))
+        sys.stdout.flush()
+        os.execv(argv[0], argv)
     return 0
+
+
+def host_argv(args, channel, seconds):
+    """-> bin/sv_host.py's command line for the host role a console handed over: the app's own
+    host flags (pokeldn.app.catalog) on the seat's channel and code."""
+    from pokeldn.app import catalog
+    from pokeldn.app.runner import command
+    tool = next(t for t in catalog.SV.tools if t.key == "sv-host")
+    fixed = list(tool.fixed)
+    fixed[fixed.index("--channel") + 1] = str(channel)
+    fixed[fixed.index("--seconds") + 1] = str(int(max(seconds, 60)))
+    del fixed[fixed.index("--offer-out"):fixed.index("--offer-out") + 2]
+    code = next(f for f in tool.fields if f.flag == "--code")
+    argv = command("--run", "bin/sv_host.py", "--keys", args.keys, *fixed,
+                   *(["--code", args.code] if args.code else code.unset))
+    for path in args.trade_offer:
+        argv += ["--trade-offer", path]
+    if args.offer_out:
+        argv += ["--offer-out", args.offer_out]
+    if args.capture:
+        root, ext = os.path.splitext(args.capture)
+        argv += ["--capture", f"{root}_host{ext or '.jsonl'}"]
+    return argv
 
 
 def main_ip(args):
@@ -613,6 +666,9 @@ def main_ip(args):
                     tcp.close()
                 except OSError:
                     pass
+            if trades_done():
+                print("[sv] the seat ended after a trade; closing")
+                break
     except KeyboardInterrupt:
         print("\n[sv] interrupted")
     finally:
@@ -635,6 +691,7 @@ async def run_session(args, keys, host_ip, host_mac, our_ip, our_mac, record):
     pending_update = None       # a type-5 update that arrived before the join response
     migration_sent = 0
     migration_at = None
+    handed = False
     identity = None
     if args.send_record:
         identity = streams.compress(Path(args.send_record).read_bytes())
@@ -649,6 +706,7 @@ async def run_session(args, keys, host_ip, host_mac, our_ip, our_mac, record):
             confirm_delay=args.confirm_delay, commit_delay=args.commit_delay)
         for n, one in enumerate(stage.offers, 1):
             print(f"[sv] offer {n} of {len(stage.offers)}: {describe_offer(one)}")
+        screen.offer("sv", stage.offer)
     pending_trade = []          # (due, port, payload) the trade stage asked to send
 
     def schedule_trade(delay, port, payload):
@@ -666,7 +724,9 @@ async def run_session(args, keys, host_ip, host_mac, our_ip, our_mac, record):
     if args.record_set:
         for name in sorted(os.listdir(args.record_set)):
             if name.endswith(".bin"):
-                record_set.append((int(name[:-4]), Path(os.path.join(args.record_set, name)).read_bytes()))
+                seq, payload = int(name[:-4]), Path(os.path.join(args.record_set, name)).read_bytes()
+                record_set.append((seq, reference.named_record(payload, args.trainer_name) if seq == 1
+                                   else payload))
         print(f"[sv] the record set holds {len(record_set)} record(s), "
               f"sequence ids {record_set[0][0]}..{record_set[-1][0]}")
     set_sent = False
@@ -796,6 +856,7 @@ async def run_session(args, keys, host_ip, host_mac, our_ip, our_mac, record):
     opened = False
     last_rtt = 0.0
     pending_rtt = []            # (due, request payload, requester var)
+    host_leaving = False
     while time.monotonic() - t0 < args.hold:
         now = time.time()
         for due, request, requester in [e for e in pending_rtt if e[0] <= now]:
@@ -827,7 +888,7 @@ async def run_session(args, keys, host_ip, host_mac, our_ip, our_mac, record):
                 not args.session_join or (joined_at and now - joined_at >= args.open_delay)):
             opened = True
             send_opening()
-        if args.session_join and host_var is not None and not joined and (
+        if args.session_join and host_var is not None and not joined and elapsed >= args.join_delay and (
                 join_sent == 0.0 or (args.join_repeat and now - join_sent >= args.join_repeat)):
             join_sent = now
             send_join()
@@ -960,6 +1021,8 @@ async def run_session(args, keys, host_ip, host_mac, our_ip, our_mac, record):
             if msg.protocol not in (PROTO_RTT,) or args.verbose_rtt:
                 print(f"[sv] <- {addr[0]} {_describe_msg(msg)}  {msg.payload.hex()[:160]}")
             if msg.protocol == PROTO_NET and len(msg.payload) > 1:
+                if msg.payload[:2] == bytes([1, pia_connect.NET_START_HOST_MIGRATION]):
+                    host_leaving = True
                 req = pia_connect.parse_net_conn_request(msg.payload)
                 if req is not None:
                     stated_var, stated_const, seqid = req
@@ -1056,6 +1119,8 @@ async def run_session(args, keys, host_ip, host_mac, our_ip, our_mac, record):
                         send(out(ack, host_var or 0, protocol=PROTO_SESSION),
                              "migration ack", to=host_ip)
                         print(f"[sv] -> {host_ip}: start-host-migration ack (type 8)")
+                        # Before the announcement it is the seat decision; after, the player leaving.
+                        handed = handed or not channel["port2"]
             if msg.protocol == PROTO_CLOCK:
                 print(f"[sv] <- the host answered the clone clock: {msg.payload.hex()}")
             if not args.no_rtt and msg.protocol == PROTO_RTT and msg.payload and msg.payload[0] == 0:
@@ -1118,17 +1183,18 @@ async def run_session(args, keys, host_ip, host_mac, our_ip, our_mac, record):
                             offers_seen += 1
                             print(f"[sv] {host_ip}: offers {describe_offer(body)}")
                             if args.offer_out:
-                                path = (args.offer_out if offers_seen == 1
-                                        else f"{args.offer_out}.{offers_seen}")
+                                path = pokemon_service.trade_path(args.offer_out, offers_seen)
                                 pokemon_service.save_received("sv", path, body)
                                 print(f"[sv] the host's offer written to {path}")
                         if stage.trades > trades_done:
                             trades_done = stage.trades
                             show_done()
+                            screen.received("sv", (stage.host_offers or [None])[-1])
                             record(rec="trade_done", n=trades_done, t=time.time())
                             if stage.done:
                                 print(f"[sv] TRADE {trades_done} COMPLETE; no record left to offer")
                             else:
+                                screen.offer("sv", stage.offer)
                                 print(f"[sv] TRADE {trades_done} COMPLETE; offering "
                                       f"{describe_offer(stage.offer)} next")
                                 if args.offer_after_open is not None:
@@ -1214,9 +1280,15 @@ async def run_session(args, keys, host_ip, host_mac, our_ip, our_mac, record):
             send(out(our_ack(key), host_var or 0, protocol=protocol, port=port,
                      flags=ack_shape["flags"]), "reliable ack", protocol=protocol, port=port)
             last_ack[key] = time.time()
+        if host_leaving and not args.stay_on_host_migration:
+            print("[sv] the console is destroying its network (NetStartHostMigration); "
+                  "leaving the seat")
+            record(rec="left_on_host_migration", t=time.time())
+            break
     sock.close()
     print(f"[sv] seat over: {seen} datagram(s) in, {authed} authenticated. messages by protocol: "
           + " ".join(f"0x{p:02x}={n}" for p, n in sorted(counts.items())))
+    return {"handed": handed}
 
 
 if __name__ == "__main__":

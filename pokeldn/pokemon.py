@@ -30,11 +30,13 @@ def _command() -> list[str]:
     override = os.environ.get("POKELDN_PKHEX")
     if override:
         return ["dotnet", override] if override.endswith(".dll") else [override]
-    # dist/ is the release build's single file; bin/ is a local `dotnet build -c Release`.
-    found = [os.path.join(HERE, "dist", EXE), *glob.glob(os.path.join(HERE, "bin", "Release", "*", "*", EXE))]
-    for path in found:
-        if os.path.isfile(path):
-            return [path]
+    # dist/ is the release build's single file; bin/ is a local `dotnet build -c Release`. The newest
+    # wins: a dist/ left by a pack would otherwise hide every later source build.
+    found = [path for path in (os.path.join(HERE, "dist", EXE),
+                               *glob.glob(os.path.join(HERE, "bin", "Release", "*", "*", EXE)))
+             if os.path.isfile(path)]
+    if found:
+        return [max(found, key=os.path.getmtime)]
     raise BuilderError("PKHeX is missing. From source, run: dotnet build -c Release services/pkhex")
 
 
@@ -78,22 +80,32 @@ class Service:
             self.species_cache[key] = sorted(names, key=lambda n: n["name"])
         return self.species_cache[key]
 
-    def options(self, game: str, species: int, trainer: dict, version: str = "") -> dict:
-        """The natures, abilities, held items, balls and effort kind an offer of this species can ask for."""
-        key = f"{game}:options:{species}:{version}"
+    def options(self, game: str, species: int, trainer: dict, version: str = "", form: int = 0) -> dict:
+        """The forms, natures, abilities, held items, balls and effort kind an offer of this species can ask for."""
+        key = f"{game}:options:{species}:{form}:{version}"
         if key not in self.species_cache:
             self.species_cache[key] = self._ask({"cmd": "options", "game": game, "species": species,
-                                                 "trainer": trainer, "version": version})
+                                                 "form": form, "trainer": trainer, "version": version})
         return self.species_cache[key]
+
+    def gender_ratio(self, game: str, species: int, form: int = 0) -> int:
+        """The species' personal gender byte: 0 male only, 254 female only, 255 genderless."""
+        return self._ask({"cmd": "gender_ratio", "game": game, "species": species, "form": form})["ratio"]
 
     def make(self, game: str, species: int, trainer: dict, level: int = 0, shiny: bool = False,
              nickname: str = "", version: str = "", options: dict | None = None) -> dict:
-        """options: nature, ability, gender, held_item, ball (ids), and ivs / effort as {hp, atk, def, spa, spd, spe}."""
+        """options: form, nature, ability, gender, held_item, ball (ids), moves (up to four ids), and ivs / effort
+        as {hp, atk, def, spa, spd, spe}."""
         reply = self._ask({"cmd": "make", "game": game, "species": species, "level": level, "shiny": shiny,
                            "nickname": nickname, "trainer": trainer, "version": version,
                            "options": options or {}})
         reply["file"] = self._save(game, reply)
         return reply
+
+    def paste(self, game: str, text: str, trainer: dict, version: str = "") -> list[dict]:
+        """The Showdown sets in `text`, each as make's values with its errors and notes (services/pkhex Paste)."""
+        return self._ask({"cmd": "paste", "game": game, "text": text, "trainer": trainer,
+                          "version": version})["sets"]
 
     def check_bytes(self, game: str, data: bytes, *, fresh=False, fields=None) -> dict:
         data = entity_bytes(game, data)
@@ -114,7 +126,18 @@ class Service:
         reply = self.check_bytes(game, data, fresh=fresh, fields=fields)
         if not reply["legal"]:
             raise BuilderError(reply["report"])
+        if reply.get("note"):
+            print(f"[pokemon] the offer {reply['note']}", flush=True)
         return base64.b64decode(reply["data"])
+
+    def events(self) -> list[dict]:
+        """PKHeX's Gen 3 event gifts a FireRed/LeafGreen can be sent."""
+        return self._ask({"cmd": "events", "game": "frlg"})["events"]
+
+    def event(self, name: str, language: int = 0) -> tuple[bytes, str]:
+        """-> (decrypted .pk3 party record, summary): a fresh legal copy of the named event."""
+        reply = self._ask({"cmd": "event", "game": "frlg", "name": name, "language": language})
+        return base64.b64decode(reply["data"]), reply["summary"]
 
     def validate_gift(self, data):
         from pokeldn.swsh import wc8
@@ -149,7 +172,7 @@ atexit.register(SERVICE.close)
 
 
 def summary(info: dict) -> str:
-    parts = [info["species"], f"level {info['level']}"]
+    parts = [f"{info['species']}-{info['form']}" if info.get("form") else info["species"], f"level {info['level']}"]
     if info.get("shiny"):
         parts.append("shiny")
     if info.get("nickname") and info["nickname"].lower() != info["species"].lower():
