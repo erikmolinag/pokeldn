@@ -24,6 +24,9 @@ installed on the Switch or Switch 2. Seven games are supported:
 ✓ works on a retail console · ✗ not done · ∅ the game has no such feature over local wireless
 FRLG FireRed/LeafGreen · LGPE Let's Go Pikachu/Eevee · SwSh Sword/Shield · BDSP Brilliant Diamond/Shining Pearl · PLA Legends Arceus · SV Scarlet/Violet · PLZA Legends Z-A
 
+FRLG supports both versions in English, French, German, Italian, Spanish and Japanese. The added
+editions have offline cartridge-ROM tests; their wireless delivery still needs retail checks.
+
 Every game trades through the ESP32 board. Protocol documentation:
 [decryptu.github.io/pokeldn](https://decryptu.github.io/pokeldn/).
 
@@ -47,7 +50,10 @@ Gift below with the tested settings. The only file it asks for is `prod.keys`.
 - macOS: the app is unsigned, so the first launch is blocked. Open it once and close the warning,
   then System Settings, Privacy & Security, scroll down to Security, Open Anyway next to pokeldn,
   and confirm with your password. Later launches open normally.
-- Windows: SmartScreen may stop the unsigned app; choose More info, then Run anyway.
+- Windows: extract the zip and run `pokeldn.exe` inside the `pokeldn` folder; keep the `_internal`
+  folder beside it. SmartScreen may stop the unsigned app; choose More info, then Run anyway. A classic
+  ESP32 needs its USB chip's driver (CP210x or CH340) before it gets a COM port; the Board page links
+  both and names the one missing ([Windows USB drivers](docs/gui.md#windows-usb-drivers)).
 - Linux: it needs GTK 3 and libsecret, present on desktop distributions, and serial access
   (`sudo usermod -aG dialout $USER`; the group is `uucp` on Arch). On Ubuntu 22.04, brltty takes
   CH340 boards and their port never appears: `sudo apt remove brltty` ([Linux serial ports](docs/gui.md#linux-serial-ports)).
@@ -82,7 +88,8 @@ Both launchers accept `--gift-file FILE`. Native conversion and the file schema 
 - A classic ESP32 board with a USB serial bridge, or an ESP32-S3, ESP32-C3 or ESP32-C6 through native USB
   Serial/JTAG, flashed with [`firmware/esp32`](firmware/esp32) for its chip. All use 2.4 GHz.
   Board requirements and hardware verification are on [ESP32 radio](docs/hardware_esp32.md#supported-boards).
-- Optional: a 128x64 SSD1306 I2C OLED on the board (classic ESP32: SDA D21, SCL D22, VCC 3V3) shows
+- Optional: a 128x64 SSD1306, SSD1315 or SSD1309 I2C OLED on the board (classic ESP32: SDA D21, SCL
+  D22; ESP32-S3: SDA GPIO8, SCL GPIO9; VCC 3V3) shows
   the radio's traffic, the Pokemon each trade sends and receives, and the Mystery Gift card; idle,
   it dims after a minute and turns off after ten, and BOOT wakes it
   ([The screen](docs/hardware_esp32.md#the-screen)).
@@ -135,7 +142,7 @@ A Linux Wi-Fi card (legacy, root, no `POKELDN_RADIO`) is covered on [Adapters](d
 | [`pokeldn/app/`](pokeldn/app), [`services/pkhex/`](services/pkhex), [`gui/`](gui) | shared tool runtime; PKHeX service; desktop views |
 | [`firmware/esp32/`](firmware/esp32), [`asm/`](asm) | the radio's firmware; ARM sources for the payloads the console runs |
 | [`scripts/`](scripts), [`config/`](config), [`vendor/`](vendor) | setup and code generation; host profiles; bundled LDN and the mt7601u driver |
-| [`docs/`](docs), [`tests/`](tests) | the protocol findings, with citations; `python -m pytest tests/ -q` |
+| [`docs/`](docs), [`tests/`](tests) | the protocol findings, with citations; `pip install -r requirements-dev.txt`, then `python -m pytest tests/ -q -n auto` |
 
 Run entry points from the repo root with `POKELDN_RADIO` set, as `./.venv/bin/python -u bin/NAME.py
 ...`. Config files and default output paths resolve against the working directory.
@@ -201,6 +208,18 @@ news only if it differs from what it holds; `--news-id N` forces a new one.
 
 ```bash
 ./.venv/bin/python -u bin/frlg_mg_host.py --news berry --news-id 7
+```
+
+**Save backup and restore.** The same Friend path copies the whole 128 KB save to a `.sav` file, or
+writes a `.sav` back: beside the console's own save, every sector read back, then the game loads it
+and saves; anything short of that leaves the console's save as it was. In the app, the Mystery Gift
+tool's Your save tab keeps the backups, names them, imports and exports `.sav` files and edits the
+trainer and party through PKHeX. A backup took about four minutes on a retail French FireRed; the
+restore is proven against the scripted console and has not yet run on a retail Switch. [Save backup and restore](docs/frlg_gift.md#save-backup-and-restore).
+
+```bash
+./.venv/bin/python -u bin/frlg_mg_host.py --live --save-backup backup.sav --save-resume-dir partial
+./.venv/bin/python -u bin/frlg_mg_host.py --live --save-restore backup.sav
 ```
 
 **Console save.** A Mystery Gift session runs native ARM code on the console. `save-dump` reads the

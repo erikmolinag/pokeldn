@@ -52,10 +52,6 @@ ten minutes of counted play time), then the fatal error screen.
 
 ## Unresolved
 
-- How counted play time relates to wall time, so how long the lock lasts on a clock: the rate of
-  the gated call `0x13c944` and whether the frame period stays at 33.3 ms are unread. Trying Link
-  Trade at play time P + 9 and P + 11 minutes after an aborted commit, against a stopwatch, measures
-  both.
 - What leaves a console's clone protocol silent on the host's `0xa1` on clone type 4, while its radio
   acknowledges every frame, after a host answers its withdrawn vote with A 2. `0x51c110`
   drops such a message silently in `0x522a60` while the sender's bit is in the `+0xc0` mask, and
@@ -65,14 +61,3 @@ ten minutes of counted play time), then the fatal error screen.
   severity-4 error (`0x4d8a80`, result 2 and the fatal error screen). An `0xa1` repeated until
   answered separates a pending mask (a later copy answered) from a message that never reaches the
   clone protocol (none answered); a sniffing board records what arrived independently of the host.
-- Whether a partner leaving during the sync save reaches the code 0xe abort. The pump fails when
-  `+0x1e6` is 1 or less, but the recount runs only under the guards on `[s+0xd8]`, `[s+0xd4]` and
-  `0x52abf0`, whose values in a trade are unread, and the local station's own record (the other
-  callers of `0x5a9430`, `0x581f20` and `0x583b90`) is untraced.
-- Which process the trade dispatcher's child is, and whether the sync save's commit channel at
-  `seq+0xb8` is released after an aborted commit.
-- Whether the channel counter or the 16-entry channel table bounds a long seat. `0x116e80` hands out
-  ids from `mgr+0x270` and returns 0 with 16 channels registered; `0x117920` compacts out dead ones.
-  Three trades on a hosted seat were measured; the limit beyond that is unmeasured.
-- Whether the dispatcher's modes 1 and 2 are link battles. The reading rests on the scene they build;
-  a capture of a link battle's session, with the mode word `+0x8c`, settles it.

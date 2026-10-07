@@ -16,7 +16,11 @@ two link layers are stacked:
 
 [pret/pokefirered](https://github.com/pret/pokefirered) is authoritative for the whole game-level
 protocol at `REVISION >= 0xA`. Cartridge header, read off both consoles: software version `0x0A`,
-game code `BPRF` (FireRed, French) and `BPGF` (LeafGreen, French).
+game code `BPRF` (FireRed, French) and `BPGF` (LeafGreen, French). The host also selects measured
+ROM and RAM addresses for the English, German, Italian, Spanish and Japanese pairs, twelve
+cartridges in total. Mystery Gift detects the language from the cartridge code after the
+player chooses pokeldn in the Friend list; the Basic screen shows this beside the version. The added languages have offline ROM and mGBA checks; wireless delivery
+on those editions still requires retail verification. See [The cartridge maps](frlg_rom_map.md#the-international-revision-0x0a-cartridges).
 
 A console that leaves about three seconds after associating, once the Pia session has finalized,
 was given an association response without 6, 9 and 12 Mbit/s ([frlg_link.md](frlg_link.md), The
@@ -33,6 +37,16 @@ written, its ROM mapped into named functions for the build it runs, its own func
 eight arguments, and a Pokemon chosen by the host built by its own `CreateMon` and left in the
 player's party. The RNG is closed end to end; an aimed shiny encounter costs one A press per
 attempt.
+
+The guest-to-wrapper boundary is decoded ([Code on the
+console](frlg_rom.md#where-the-boundary-stands)): the guest's one store past a region's backing
+is byte-precise and constant-valued, a planted pointer's consumers read their targets from
+`main`'s own data at static addresses, and the syscalls' stores into the component are read
+back as counts and GBA addresses, every address bounds-checked. The wrapper's own scan
+pipeline is decoded to its first stage ([The wrapper's own scan
+pipeline](frlg_rom.md#the-wrappers-own-scan-pipeline)): the scan results, the consume loop
+and the parent-candidate list are all fixed-shape and bounded, and the one length-taking
+path (a station name, at most `0x40`) is clamped at its caller.
 
 ## Pages
 

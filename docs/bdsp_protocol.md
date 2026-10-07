@@ -542,8 +542,17 @@ through it in `NetStateModel$$SetState` [0x023e2604]. The only store to +0x38 is
 when the player recruits a battle (`stateModelType` 0; the A press passes 1 and builds a
 `BattleJoinStateModel`). `UnionStateController` is built once per `UnionRoomManager`
 (`UnionRoomManager$$SetUp`, `.ctor` 0x01e4d01c), and a link battle keeps both
-(`EvDataManager$$UpdateStart` -> `UnionRoomManager$$ReturnBattle` [0x01b02a78], no constructor). A
-0x08 reaching a console whose player has not recruited a battle in that visit writes through null.
+(`EvDataManager$$UpdateStart` -> `UnionRoomManager$$ReturnBattle` [0x01b02a78], no constructor).
+Each entry builds a new `UnionRoomManager`: `EvDataManager$$EvCmdUnionProc` [0x01b35f70] adds it to a
+`new GameObject("UnionRoomManager")` [0x01b36090] before the warp into the room, with no
+`DontDestroyOnLoad`. `UnionRoomManager$$Init` [0x01e49e40] passes the zones {484, 491, 492, 493}
+(`UNION`, `UNION01` to `UNION03`) to `NetUseManager.SetEnableZone` [0x026cfca0], which subscribes to
+`FieldManager`'s zone-change event; `NetUseManager.OnZoneChange` [0x026cfef0] calls
+`Object.Destroy(gameObject)` [0x026d00f0] on the first zone outside the list. Leaving (`LeaveUnion`
+[0x01e4e300], its coroutine setting the transition zone at [0x01e560e0]) is such a change, so
+`UnionRoomManager$$OnDestroy` [0x01e4c540] runs and calls `Clear`. The recruitment model therefore
+starts null on every visit. A 0x08 reaching a console whose player has not recruited a battle in that
+visit writes through null.
 
 The ladder's 0x08 row was measured on a console that had recruited the battle. A 0x08 under a
 sequence id the client already used is discarded by the reliable window ([the Pia
@@ -617,7 +626,10 @@ larger byte faults the console.
 
 Each `UgFieldManager` builds a new `UgNetworkManager` in `StartSession` [0x01cfebb0] (the only
 `AddComponent<UgNetworkManager>`, 0x01cfed54) and destroys it in `OnDestroy` [0x01cff530], so each
-adopts a table afresh.
+adopts a table afresh. No scene places either manager: of the 53861 MonoBehaviours in the 14052
+asset bundles and the root files of the 1.3.0 RomFS, none has `UnionRoomManager` or
+`UgNetworkManager` as its script. Both exist only in the script table of
+`globalgamemanagers.assets`, which no bundle references.
 
 0x29 `NetDigGroupIdData` shares 0x61's struct and methods. Only `NetDataParser`'s constructor
 [0x0224a420] references it: nothing sends it, and `UgNetworkManager$$OnReceiveData` [0x01f7a880]
@@ -686,3 +698,11 @@ animators bind only translations. The factor `Screen.width / 1280` is 1: the 1.3
 u32 at +0x1c is 0, which keeps the default-resolution switch `0x006062e8` at 1280 x 720 docked and
 handheld (1 follows the operation mode, 2 the performance mode, 3 both), and no managed code calls
 `SetResolution` or a `Screen` setter.
+
+`Screen.width` is the int at +0x68 of the single native screen object (`0x04efe760`), read through
+vtable slot 0xa8 (`0x002c2c24`). Three sites write it: the constructor `0x002c257c` (1280 x 720), the
+one startup `SetMode(0)` `0x002c2858` with the values of `0x006062e8`, and `SetResolution`
+`0x002c2888`, which only the operation-mode and performance-mode handlers `0x002c2a1c` and
+`0x002c2af0` call, and only when rawsettings +0x1c is nonzero. The player settings in
+`globalgamemanagers` are not read on this path; managed `Screen.SetResolution` stores its arguments
+at `[obj+8]` and changes nothing.

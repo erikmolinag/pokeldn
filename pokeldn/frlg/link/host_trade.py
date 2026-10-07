@@ -432,7 +432,7 @@ class HostTradeEngine:
         if child_already_exited:
             self.info("Switch exited the room first; sending the Linux EXIT_ROOM response.")
         else:
-            self.info("Five-second room delay complete; Linux is exiting the trade room.")
+            self.info("Five-second room delay complete; leaving the trade room.")
 
     def _complete_room_exit(self):
         if self.state != H_EXIT:
@@ -829,7 +829,8 @@ class HostTradeEngine:
                 "Switch confirmed it left the chat; closing now."
                 if self._chat_exiting else
                 "Switch confirmed it left the trade room; keeping peer traffic active "
-                "for 15 seconds before disconnecting.")
+                f"for {self.timing.post_client_close_grace_frames / 60:g} seconds before "
+                "disconnecting.")
 
     def _on_child_block(self, count, data):
         self._child_blocks_landed += 1
@@ -1179,7 +1180,7 @@ class HostTradeEngine:
             done = self.timing.post_cancel_exit_wait_frames - self._room_exit_wait
             self.info(
                 f"Room-exit buffer {done}/{self.timing.post_cancel_exit_wait_frames} frames; "
-                f"still waiting before Linux walks out.")
+                f"still waiting before leaving.")
         if self._room_exit_wait <= 0:
             self._begin_room_exit()
 
@@ -1190,8 +1191,7 @@ class HostTradeEngine:
                 self._close_grace_wait = None
                 self.disconnect_requested = True
                 self.trace.append(("close_grace_complete",))
-                self.info(
-                    "Fifteen-second room-exit buffer complete; closing the RFU session.")
+                self.info("Room-exit grace complete; closing the RFU session.")
         self._close_retry_wait -= 1
         if self._close_retry_wait <= 0:
             for _ in range(self.timing.startup_standby_echo_frames):

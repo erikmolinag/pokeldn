@@ -266,6 +266,13 @@ RTT samples enable retransmission; the announcement job has no RTT gate. A loss-
 Scarlet 4.0.0 host announces and completes a trade with no RTT requests or answers. A missing identity record holds the BoxTrade job in state 1 (`+0xb8`); the finished-slot
 count at `0x1e51ae8` remains 1 against a required 2 until retransmission completes the set.
 
+Both launchers retry pending identity records. Dropped initializer and middle-record cases complete
+through the launchers in `tests/test_sv_identity_loss.py`. The patched emulator completed trades
+with those losses; a retail console completed two trades per role with pending identity records
+retried and acknowledged, followed by clean departure.
+The earlier unannounced seat whose acknowledgement reached 47 has no independent air capture
+establishing which outgoing chunk, if any, was lost.
+
 ### A-MSDU frames in a capture
 
 Both consoles pack several MSDUs into one A-MSDU frame. A passive capture must unpack the subframes
@@ -647,7 +654,14 @@ receiver `0x1945404`, type 4 by the type-0xB receiver `0x279be18`.
 
 The own-leave path at `0x12fbc3c..0x12fbc4c` completes a client's pending type-2 request with
 result 5 (`+0x40..+0x43 = 02 00 01 05`). The next creator can replace that completed request
-without restarting the game, including after a disconnect before type-9 acceptance.
+without restarting the game, including after a disconnect before type-9 acceptance. A leave event
+for the master's id alone does not complete the request: `0x12fbc70..0x12fbc84` calls only
+`0x12fbef0`. The client's BoxTrade job still ends at 15 s with result 4, because state 5 tests the
+clock (`0x1e51c74..0x1e51ca4`, base `+0x108` set at `0x1e51c6c`) before it polls the request through
+its weak reference `+0xf8` (`0x18ab588`, `0x18ab614`). Neither the timeout path `0x1e51d50` nor the
+job destructor `0x1e51740`, which only releases the weak reference through `0x18ccdb4`, touches the
+relay's request. It stays pending at relay `+0xb8`, and `0x2799b10` and `0x18ab83c` refuse, until
+the type-9 or type-0x0D receiver or the client's own leave event completes it.
 
 The relay lives until the application exits, so a request pending at `+0xb8` survives every seat,
 search and menu until a completer runs. Its holder `0x4739430` (GOT `0x46da9c0`, guard `0x4739440`
@@ -978,15 +992,17 @@ lets `bin/sv_join.py` resume scanning ([Ending a run](architecture.md#ending-a-r
 
 ## Unresolved
 
-- Whether an unannounced seat whose identity set reached acknowledgement 47 lost an outgoing chunk
-  on the air. A sender that advanced its own `lowest_pending` to 47 before the acknowledgement hides
-  it: a bulk ack does not show StreamData completion. Dropping one outgoing chunk reproduces the
-  symptom in the emulator.
-- Why a console joined to `bin/sv_host.py` can acknowledge the host's announcement and never send its
-  port-2 join.
-- Whether a master-only leave event, without the client's own leave event, can hold a type-2
-  request across the client's 15 s timeout. The master-only branch drains the relay's queues
-  through `0x12fbef0` while preserving `+0xb8`.
+- Which gate held a console joined to `bin/sv_host.py` that acknowledged the announcement and sent no
+  port-2 join. The join is produced only by BoxTrade state 4 (`0x1e51c40`). Before it, state 1 waits
+  with no timer for two finished identity blocks (`0x1e51ae4`), and state 4 waits up to 15 s for a
+  relay slot of kind 1 that only a type 7 creates (`0x1e51c10`); a leave event of the master's or the
+  console's own id clears that slot (`0x12fbc68`, `0x12fbc84`). The 0x80 window acknowledges the
+  announcement before the game's poller reads it, so the acknowledgement separates neither. The one
+  recorded instance predates the host's identity retries. `bin/sv_host.py --announce` names the gate
+  20 s after its announcement when no `0x7c` port 2 message has arrived: a line ending `the state-1
+  gate` lists the identity records still unacknowledged ([The first record on a stream carries
+  INITIALIZED](#the-first-record-on-a-stream-carries-initialized)), one ending `the state-4 gate`
+  has all of them acknowledged; the capture keeps it as a `port2_gate` row.
 - What a console does between its player backing out and its first departure message: none of the
   captures marks the button press. In one joiner seat the cancel `8000040100` preceded the type 7
   by 1.5 s.

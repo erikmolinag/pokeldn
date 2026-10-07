@@ -41,6 +41,22 @@ FireRed and LeafGreen, Let's Go, Sword/Shield and BDSP. FireRed and LeafGreen ho
 characters; a longer name is cut to seven, and a name outside the Gen III characters becomes
 `POKELDN` (`Settings.name`).
 
+## Windows USB drivers
+
+A classic ESP32 board reaches the computer through a USB-to-serial bridge chip, printed next to its
+USB socket. Windows gives the board a COM port only once the bridge's driver is installed; without
+it the board is absent from the app's list and Device Manager shows it with a warning (problem code
+28, drivers not installed). ESP32-S3, C3 and C6 boards on their native USB port need no driver.
+
+| bridge | USB id | driver | install |
+|---|---|---|---|
+| Silicon Labs CP2102 / CP210x | `10c4:ea60` | [CP210x VCP drivers](https://www.silabs.com/developer-tools/usb-to-uart-bridge-vcp-drivers), the CP210x Universal Windows Driver zip | extract it, right-click `silabser.inf`, Install, then unplug and replug the board |
+| WCH CH340 | `1a86:7523` | [CH341SER.EXE](https://www.wch-ic.com/downloads/CH341SER_EXE.html) | run it, Install, then unplug and replug the board |
+
+With no COM port listed, the Board page asks Windows for USB devices with a Device Manager problem
+(`Get-CimInstance Win32_PnPEntity`, `ConfigManagerErrorCode <> 0`) every 2 s and names a known bridge
+it finds, with that driver's install steps (`gui/board.py` `bridges_without_driver`).
+
 ## Linux serial ports
 
 The app opens the board as the user, with no root and no kernel networking. Opening the port needs
@@ -75,6 +91,35 @@ Symlinks are skipped; files changed after the check are kept. Empty subfolders a
 Finish any active session, flash or board check before cleanup. Cleanup runs in the background and
 holds off new sessions and flashes until it finishes. A file that cannot be removed is reported and
 can be retried. The Pokemon sprites cache has its own Clear the cache button under advanced settings.
+
+## Your saves
+
+The FireRed and LeafGreen Mystery Gift tool's Your save tab backs the console's save up, or puts one
+back, over the Wonder Cards, Friend path ([Save backup and restore](frlg_gift.md#save-backup-and-restore)).
+The saves live in `Documents/pokeldn/Saves` (`pokeldn.app.saves`), one `.sav` each with a `.json`
+beside it holding its name, where it came from and the console's game code. Clear local files never
+touches the folder; with `POKELDN_DATA` set, the library is `Saves` inside that folder instead.
+
+| action | what happens |
+|---|---|
+| Back up from the Switch | the launcher writes `backup-<run>.sav` and its `.json`; a backup the link cut short is kept in `Saves/.partial` and the next one goes on from it |
+| Put a save on the Switch | the chosen save goes to `--save-restore`; Start stays blocked until one is chosen |
+| `+`, or a `.sav` dropped on the card | the file is copied in; a 16-byte emulator footer is dropped, any other size than 128 KB is refused |
+| Rename, Export .sav, Delete | the name is cosmetic and kept in the `.json`; Delete removes both files from this computer only |
+| View and edit | PKHeX reads the trainer, party and PC boxes; see below |
+
+During a run the Session panel draws the launcher's `[save] backup N of 128 KB` or
+`[save] restore N of M sectors` lines as a progress bar, and the list refreshes when the run ends.
+
+A restore is blocked when the save has no whole copy, and when PKHeX finds a party Pokemon not legal,
+until Restore anyway is turned on. A save's name defaults to the trainer and the cartridge, which only
+a backup knows.
+
+The editor changes the trainer's name, gender, money and coins, and the party: reorder, remove, or add
+a Pokemon PKHeX builds for this save's own trainer (name, ID, secret ID and language). Each party
+Pokemon shows PKHeX's verdict; Check legality runs it over one box, which takes seconds. Keep as a new
+save writes the result through PKHeX, which recomputes every sector checksum, checks that the game's
+own sector test passes and adds it to the library as a new entry; the original is unchanged.
 
 ## Pokemon sprites
 
@@ -121,7 +166,7 @@ host, for tests (`tests/test_sprites.py`).
 At launch the app asks `api.github.com/repos/Decryptu/pokeldn/releases/latest` for the newest stable
 release, in the background with a 5 s timeout. A tag above the app's `pokeldn.__version__` adds an
 Update entry to the sidebar; it opens the release notes or downloads this computer's archive from the
-release (`pokeldn-macos-arm64.zip`, `pokeldn-windows-x64.exe`, `pokeldn-linux-x64.tar.gz`), or the
+release (`pokeldn-macos-arm64.zip`, `pokeldn-windows-x64.zip`, `pokeldn-linux-x64.tar.gz`), or the
 release page when none fits. The user replaces the app with the download; settings, keys and received
 Pokemon live outside it.
 
@@ -199,11 +244,12 @@ idf.py -B build/esp32c6 -D SDKCONFIG="$PWD/build/esp32c6/sdkconfig" build
 idf.py -B build/esp32c6 merge-bin -o "$POKELDN_IMAGES/pokeldn-radio-c6.bin"
 cd ../..
 python scripts/build_client.py
+python scripts/build_unicorn.py
 python scripts/pack_app.py
 ```
 
-The absolute output paths keep the images in `gui/firmware`. The packer requires all four images
-and the client from `scripts/build_client.py`; the frozen app check verifies all are included and
+The absolute output paths keep the images in `gui/firmware`. The packer requires all four images,
+the client from `scripts/build_client.py` and the Unicorn from `scripts/build_unicorn.py` (needs CMake); the frozen app check verifies all are included and
 that the bundled client carries `flet_drop`. The release workflow builds each target separately
 and supplies all four images to every desktop packer.
 
@@ -216,12 +262,46 @@ Manual workflow runs produce artifacts; `v*` tags publish a release named `pokel
 Only tags with a hyphen, such as `v0.3.0-rc1`, are marked as pre-releases; GitHub shows the
 newest other release as Latest in the repository sidebar.
 
+The apps are one-folder PyInstaller builds: `pokeldn.app` on macOS, a `pokeldn` folder holding
+`pokeldn` or `pokeldn.exe` and `_internal` on Linux and Windows. A single file unpacks its whole bundle (about 180 MB) to a temporary folder at every launch, and every
+run is the app relaunching itself, so a run paid it again. On an M4 the one-folder app reaches the
+Games page in 0.7 s instead of 2.9 s, and a run's process starts in 0.08 s instead of 1.5 s. Flet's
+packer refuses `--onedir` on macOS; `scripts/pack_app.py` passes it to PyInstaller after Flet's own
+`--onefile`, and the later flag wins. The bundle's Python process never checks in with the Dock: as a
+foreground app it shows a second icon that bounces until the app quits. The packer sets
+`LSBackgroundOnly` in its `Info.plist`, so only the viewer has a Dock icon, as under the single-file
+bootloader.
+
+| part | size | what keeps it small |
+|---|---|---|
+| Flet viewer (`scripts/build_client.py`) | 31 MB, 9.4 MB as the macOS archive | no optional Flet extension (video, maps, camera, webview and the rest; the app draws core controls only), on macOS only the build machine's architecture, Dart symbols split out (`--split-debug-info`), and on macOS an xz archive |
+| Unicorn (`scripts/build_unicorn.py`) | 3 MB | the installed release built from source with the ARM and ARM64 engines only; the wheel's library carries every CPU family (16 MB) |
+| PKHeX helper (`services/pkhex`) | 16 MB | full trimming: framework and PKHeX.Core code the helper never reaches is dropped; EventSource, debugger and hot-reload support are off |
+| Python | 8 MB of modules | the packer excludes Flet's web server, auth and image extras (`flet_web`, FastAPI, Uvicorn, Pydantic, httpx, Pillow), pytest, Pygments and rich's syntax, Markdown and traceback modules, `multiprocessing`, `_pydecimal`, and on macOS the East Asian codecs; macOS libraries lose their local symbols (`strip -x`) |
+
+Trimming turns off reflection-based JSON in .NET; the helper's replies need it, so the project turns it
+back on (`JsonSerializerIsReflectionEnabledByDefault`). Without it every command answers
+`JsonTypeInfo metadata for type 'System.String' was not provided`. The Gen 3 event table is internal to
+PKHeX.Core and read by name; a `DynamicDependency` attribute keeps it through trimming.
+
+The macOS packer writes the viewer as xz under Flet's file name `flet-macos.tar.gz` (9.4 MB instead of
+13.6 MB); flet_desktop 1.0.2 opens that file with mode `r:gz`, so the frozen app hands flet_desktop a
+`tarfile` whose `open` detects the compression (`gui/flet_client.py`). The executable and the PKHeX
+helper are never stripped: both carry an archive after their Mach-O image. Flet's macOS project runs
+`dart run rive_native:setup` on every build; with Rive gone that step fails, so the client build
+replaces it with `exit 0`.
+
+The viewer is unpacked once per build into `~/.flet/client/flet-desktop-full-<version>-<fingerprint>`,
+and Flet never removes an older build's folder. At each launch the frozen app marks its own folder
+with `pokeldn-drop` and removes the other folders carrying that marker or, from earlier macOS builds,
+a `pokeldn.app` (`gui/flet_client.py`); another Flet app's viewer stays.
+
 Flet 1.0.2's packer re-signs the macOS viewer without its existing entitlements. The packaging
 wrapper in `scripts/pack_flet.py` retains them when signing the viewer after its metadata changes.
 The frozen check reads the sealed `com.apple.security.files.user-selected.read-write` entitlement
 from the embedded viewer; without it, choosing `prod.keys` raises `ENTITLEMENT_NOT_FOUND`.
 
-The Linux bootloader sets `LD_LIBRARY_PATH` to the unpacked bundle, which carries the build
+The Linux bootloader sets `LD_LIBRARY_PATH` to the bundle folder, which carries the build
 machine's `libstdc++.so.6` (Ubuntu 22.04). Loaded first, it leaves Fedora 44's Mesa with no EGL
 client extensions, and the Flet viewer aborts in libepoxy (`No provider of eglGetPlatformDisplayEXT`).
 `pokeldn/app/paths.py` restores the user's `LD_LIBRARY_PATH` for every program the app starts, and
@@ -229,8 +309,8 @@ sets `FLET_LINUX_DISTRO` to the bundled viewer's build: Flet otherwise picks a v
 downloads one the bundle does not carry. The frozen check asserts both on Linux.
 
 The app bundles Unicorn for Check offline. It loads its architecture modules by name, so the
-packer collects its submodules and adds the platform's library to `unicorn/lib` itself: PyInstaller's
-library patterns match `lib*.so`, not Linux's `libunicorn.so.2`. PyInstaller's Windows bootloader
+packer collects its submodules and adds the ARM-only library to `unicorn/lib` itself, under the wheel's
+file names; the frozen check asserts ARM64 is there and x86 is not. PyInstaller's Windows bootloader
 is linked with Control Flow Guard (DllCharacteristics `0xC160`), and Unicorn ends a CFG process
 with `0xC0000409` on its first `uc_mem_map`
 ([unicorn#2281](https://github.com/unicorn-engine/unicorn/issues/2281)); a 64 MiB thread stack

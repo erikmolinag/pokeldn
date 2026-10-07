@@ -126,7 +126,8 @@ def load(path, *, game=None):
         raw = stream.read(MAX_FILE_SIZE + 1)
     if len(raw) > MAX_FILE_SIZE:
         raise ValueError("Gift file exceeds 256 KiB.")
-    if path.suffix.lower() == ".pokegift" or raw.lstrip().startswith(b"{"):
+    if path.suffix.lower() == ".pokegift" or (
+            path.suffix.lower() not in NATIVE and raw.lstrip().startswith(b"{")):
         return loads(raw, game=game)
     if game == "swsh" or path.suffix.lower() == ".wc8":
         if game not in (None, "swsh"):
@@ -139,14 +140,15 @@ def load(path, *, game=None):
     raise ValueError("Choose a .pokegift file, a .wc3 file for FireRed/LeafGreen or a .wc8 file for Sword/Shield.")
 
 
-def save(path, gift):
+def save(path, gift, *, build=None):
     """A .pokegift, or the native single file a .wc3 or .wc8 path names."""
     path = Path(path).expanduser()
     if path.suffix.lower() in NATIVE:
         game, writer = NATIVE[path.suffix.lower()]
         if gift.game != game:
             raise ValueError(f"A {path.suffix.lower()} file holds a {game} gift, not {gift.game}.")
-        path.write_bytes(getattr(adapter(game), writer)(gift))
+        options = {"build": build} if game == "frlg" else {}
+        path.write_bytes(getattr(adapter(game), writer)(gift, **options))
         return
     source = dumps(gift)
     if len(source.encode("utf-8")) > MAX_FILE_SIZE:
