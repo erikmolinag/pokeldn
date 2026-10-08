@@ -1,10 +1,61 @@
 import flet as ft
 
+# The app's icon names, drawn with Material's rounded set (the poke-app look). The pixelarticons files
+# stay in assets/icons for anything that still asks for a file by name.
+MATERIAL = {
+    "arrows-horizontal": ft.Icons.SWAP_HORIZ_ROUNDED,
+    "book-open": ft.Icons.MENU_BOOK_ROUNDED,
+    "bulletlist": ft.Icons.FORMAT_LIST_BULLETED_ROUNDED,
+    "check": ft.Icons.CHECK_ROUNDED,
+    "checkbox-on": ft.Icons.CHECK_CIRCLE_ROUNDED,
+    "checkbox": ft.Icons.RADIO_BUTTON_UNCHECKED_ROUNDED,
+    "chevron-down": ft.Icons.KEYBOARD_ARROW_DOWN_ROUNDED,
+    "chevron-right": ft.Icons.KEYBOARD_ARROW_RIGHT_ROUNDED,
+    "chevron-up": ft.Icons.KEYBOARD_ARROW_UP_ROUNDED,
+    "circle-info": ft.Icons.INFO_OUTLINE_ROUNDED,
+    "circle-question": ft.Icons.HELP_OUTLINE_ROUNDED,
+    "close": ft.Icons.CLOSE_ROUNDED,
+    "code": ft.Icons.CODE_ROUNDED,
+    "coins": ft.Icons.TOLL_ROUNDED,
+    "copy": ft.Icons.CONTENT_COPY_ROUNDED,
+    "cpu": ft.Icons.MEMORY_ROUNDED,
+    "download": ft.Icons.DOWNLOAD_ROUNDED,
+    "edit": ft.Icons.EDIT_ROUNDED,
+    "external-link": ft.Icons.OPEN_IN_NEW_ROUNDED,
+    "file": ft.Icons.INSERT_DRIVE_FILE_OUTLINED,
+    "folder": ft.Icons.FOLDER_OPEN_ROUNDED,
+    "gamepad": ft.Icons.SPORTS_ESPORTS_ROUNDED,
+    "gear": ft.Icons.SETTINGS_ROUNDED,
+    "gift": ft.Icons.CARD_GIFTCARD_ROUNDED,
+    "key": ft.Icons.KEY_ROUNDED,
+    "label": ft.Icons.LABEL_OUTLINE_ROUNDED,
+    "lightbulb": ft.Icons.LIGHTBULB_OUTLINE_ROUNDED,
+    "more-vertical": ft.Icons.MORE_VERT_ROUNDED,
+    "package": ft.Icons.INVENTORY_2_OUTLINED,
+    "play": ft.Icons.PLAY_ARROW_ROUNDED,
+    "plus": ft.Icons.ADD_ROUNDED,
+    "refresh": ft.Icons.REFRESH_ROUNDED,
+    "save": ft.Icons.SAVE_ROUNDED,
+    "search": ft.Icons.SEARCH_ROUNDED,
+    "shield": ft.Icons.SHIELD_OUTLINED,
+    "shirt": ft.Icons.CHECKROOM_ROUNDED,
+    "sliders-horizontal": ft.Icons.TUNE_ROUNDED,
+    "stop": ft.Icons.STOP_ROUNDED,
+    "trash": ft.Icons.DELETE_OUTLINE_ROUNDED,
+    "upload": ft.Icons.UPLOAD_ROUNDED,
+    "usb": ft.Icons.USB_ROUNDED,
+    "warning-diamond": ft.Icons.ERROR_OUTLINE_ROUNDED,
+    "zap": ft.Icons.BOLT_ROUNDED,
+    "tool": ft.Icons.BUILD_ROUNDED,
+    # poke-app's own pages
+    "home": ft.Icons.HOME_ROUNDED,
+    "trainer": ft.Icons.BADGE_ROUNDED,
+    "pokeball": ft.Icons.CATCHING_POKEMON,
+    "language": ft.Icons.TRANSLATE_ROUNDED,
+    "male": ft.Icons.MALE_ROUNDED,
+    "female": ft.Icons.FEMALE_ROUNDED,
+}
 
-def icon(name: str, size: int = 18, color: str = "#ECEDEF", **kwargs) -> ft.Image:
-    """Pixelarticons 2.4.1, bundled from the free MIT set without changing paths."""
-    if size not in (12, 18, 24, 48, 72, 96):
-        raise ValueError("Unsupported UI icon size")
-    return ft.Image(src=f"icons/{name}.svg", width=size, height=size, color=color,
-                    color_blend_mode=ft.BlendMode.SRC_IN, fit=ft.BoxFit.CONTAIN,
-                    filter_quality=ft.FilterQuality.NONE, **kwargs)
+
+def icon(name: str, size: int = 18, color: str = "#394255", **kwargs) -> ft.Icon:
+    return ft.Icon(MATERIAL.get(name, ft.Icons.CIRCLE_OUTLINED), size=size, color=color, **kwargs)

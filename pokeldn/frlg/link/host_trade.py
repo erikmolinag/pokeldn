@@ -519,6 +519,7 @@ class HostTradeEngine:
             self._expected = "warp0"
             self._queue_block(self._link_player_block, "host:link_player")
             self.info(f"Console identified as {lp.name!r}; sending the host LinkPlayer block now.")
+            self.info(linkplayer.trainer_report(lp))
             return
         if expected == "uroom_chat":
             self._on_chat_block(data)

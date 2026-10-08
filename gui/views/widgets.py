@@ -9,10 +9,12 @@ from typing import Callable
 import flet as ft
 
 from gui import drop, theme as t
+from gui.i18n import tr
 
 
 class PixelActivity(ft.Container):
     def __init__(self, label: str = "Loading"):
+        label = tr(label)
         positions = [(6, 0), (12, 0), (12, 6), (12, 12), (6, 12), (0, 12), (0, 6), (0, 0)]
         self._pixels = [ft.Container(width=3, height=3, left=x, top=y, bgcolor=t.BLUE,
                                      opacity=1 if i == 0 else 0.2)
@@ -46,7 +48,7 @@ class CodeBlock:
         self.control = ft.Container(ft.Row([
             ft.Container(content if content is not None else self.text, expand=True,
                          padding=ft.Padding(0, 6, 0, 6)),
-            t.icon_button("copy", self._copy, "Copy code"),
+            t.icon_button("copy", self._copy, tr("Copy code")),
         ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.START),
             bgcolor=t.BG, border_radius=10, padding=10)
 
@@ -129,15 +131,15 @@ class Log:
         self.placeholder = t.text(placeholder, 12, t.FAINT)
         self.control = ft.Container(ft.Stack([t.fade(self.list, 16), ft.Container(self.placeholder, padding=12)],
                                              expand=True),
-                                    expand=True, bgcolor=ft.Colors.with_opacity(0.45, "#000000"),
-                                    border_radius=12)
+                                    expand=True, bgcolor=t.CARD, border=ft.Border.all(1, t.OUTLINE),
+                                    border_radius=16)
 
     @staticmethod
     def _line(line: str) -> ft.Text:
         lower = line.lower()
         color = t.RED if ("traceback" in lower or "error" in lower or "failed" in lower) else \
             t.GREEN if ("complete" in lower or "success" in lower) else \
-            t.BLUE if line.startswith("[app]") else t.SOFT
+            t.INFO if line.startswith("[app]") else t.SOFT
         return ft.Text(line, size=11, color=color, font_family=t.MONO, selectable=True)
 
     def add(self, line: str) -> None:
@@ -182,7 +184,7 @@ class PathField:
         self.field = t.field(value=value, mono=True, expand=True,
                              on_change=lambda e: self._changed(e.control.value), **options)
         icon = "folder" if mode == "dir" else "file"
-        row = ft.Row([self.field, t.icon_button(icon, self._browse, "Browse")], spacing=6,
+        row = ft.Row([self.field, t.icon_button(icon, self._browse, tr("Browse"))], spacing=6,
                      vertical_alignment=ft.CrossAxisAlignment.CENTER)
         self.control = (drop.target(ft.Container(row, border_radius=t.CONTROL_RADIUS), self._dropped)
                         if droppable else row)

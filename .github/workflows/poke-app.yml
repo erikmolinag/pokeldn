@@ -1,0 +1,96 @@
+name: poke-app (Windows)
+
+# The Pokemon-styled FireRed/LeafGreen edition of the desktop app, built for Windows from the poke-app
+# branch. It runs by hand (Actions, poke-app (Windows), Run workflow) and on pushes to poke-app that touch
+# the app. The radio firmware is unchanged from upstream, so the images come from Decryptu/pokeldn's
+# release instead of four ESP-IDF builds. The zip is a workflow artifact; nothing is published.
+on:
+  workflow_dispatch:
+  push:
+    branches: [poke-app]
+    paths:
+      - "gui/**"
+      - "pokeldn/**"
+      - "bin/**"
+      - "services/pkhex/**"
+      - "scripts/**"
+      - "requirements.txt"
+      - ".github/workflows/poke-app.yml"
+
+permissions:
+  contents: read
+
+env:
+  FIRMWARE_RELEASE: v0.13.1
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            gui/requirements.txt
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+      - name: Radio firmware from the upstream release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p gui/firmware
+          gh release download "$FIRMWARE_RELEASE" -R Decryptu/pokeldn -p "pokeldn-radio*.bin" -D gui/firmware
+          ls -la gui/firmware
+      - name: Install
+        run: python -m pip install -r gui/requirements.txt
+      - name: Restore the Flet client
+        id: client
+        uses: actions/cache@v4
+        with:
+          path: |
+            gui/client/*
+            !gui/client/flet
+          key: flet-client-${{ runner.os }}-${{ hashFiles('requirements.txt', 'gui/requirements.txt', 'gui/flet_client.py', 'scripts/build_client.py', 'gui/flet_drop/**') }}
+      - name: Restore the ARM-only Unicorn
+        id: unicorn
+        uses: actions/cache@v4
+        with:
+          path: |
+            gui/unicorn/lib
+            gui/unicorn/pokeldn-unicorn
+          key: unicorn-${{ runner.os }}-${{ hashFiles('requirements.txt', 'scripts/build_unicorn.py') }}
+      - name: Flutter version
+        if: steps.client.outputs.cache-hit != 'true'
+        id: flet
+        shell: bash
+        run: |
+          python -m flet_cli.cli --version --json > flet.json
+          echo "flutter=$(python -c "import json; print(json.load(open('flet.json'))['flutter'])")" >> "$GITHUB_OUTPUT"
+      - uses: subosito/flutter-action@v2
+        if: steps.client.outputs.cache-hit != 'true'
+        with:
+          flutter-version: ${{ steps.flet.outputs.flutter }}
+          channel: stable
+          cache: true
+      - name: Build the Flet client
+        if: steps.client.outputs.cache-hit != 'true'
+        run: python scripts/build_client.py
+      - name: Build the ARM-only Unicorn
+        if: steps.unicorn.outputs.cache-hit != 'true'
+        run: python scripts/build_unicorn.py
+      - name: Pack
+        run: python scripts/pack_app.py
+      - name: Verify the frozen app
+        run: python scripts/check_app.py dist/pokeldn/pokeldn.exe
+      - name: Archive
+        run: Compress-Archive -Path dist/pokeldn -DestinationPath pokeldn-pokemon-windows-x64.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pokeldn-pokemon-windows-x64
+          path: pokeldn-pokemon-windows-x64.zip
+          retention-days: 30

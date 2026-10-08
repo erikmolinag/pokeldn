@@ -8,6 +8,7 @@ import flet as ft
 import serial
 
 from gui import board
+from gui.i18n import tr
 from pokeldn.app import settings, update
 from pokeldn.app.paths import SESSION
 from gui.views.widgets import on_ui
@@ -52,6 +53,19 @@ class App:
         self.update: update.Release | None = None               # a newer release GitHub offered
         self.update_state = ""                                  # checking, current, available, offline
         self.update_listeners: list = []                        # called on the UI loop after a check
+        self.trainer_listeners: list = []                       # called on the UI loop when my_trainer changes
+
+    def trainer_read(self, found: dict, source: str = "console") -> None:
+        """Keep the player's trainer and build for their game from now on (UI loop)."""
+        self.settings.set_my_trainer(found, source)
+        version = self.settings.my_trainer.get("version")
+        if version:
+            for key in ("frlg-trade-host", "frlg-gift"):
+                stored = self.settings.tool_values.setdefault(key, {"values": {}, "extra": {}})
+                stored["values"]["--version"] = version
+            self.settings.save()
+        for listener in list(self.trainer_listeners):
+            listener()
 
     def ui(self, fn) -> None:
         on_ui(self.page, fn)
@@ -76,16 +90,17 @@ class App:
         if not present:
             hidden = board.bridges_without_port() if sys.platform.startswith("linux") else []
             if hidden:
-                fix = ("Ubuntu 22.04's braille service takes CH340 boards: sudo apt remove brltty, then "
-                       "unplug and replug the board." if "WCH CH340" in hidden else
-                       "Unplug and replug it; the kernel log (sudo dmesg) says why.")
+                fix = (tr("Ubuntu 22.04's braille service takes CH340 boards: sudo apt remove brltty, then "
+                          "unplug and replug the board.") if "WCH CH340" in hidden else
+                       tr("Unplug and replug it; the kernel log (sudo dmesg) says why."))
                 return BoardStatus("missing", "Board found without a serial port",
-                                   f"Linux gave the {hidden[0]} no serial port. {fix}")
+                                   tr("Linux gave the {bridge} no serial port. {fix}", bridge=hidden[0], fix=fix))
             if sys.platform == "win32" and self.hidden_bridges:
                 name = self.hidden_bridges[0]
-                steps = board.DRIVER_STEPS.get(name, "Install its driver; the Board page links it.")
+                steps = tr(board.DRIVER_STEPS.get(name, "Install its driver; the Board page links it."))
                 return BoardStatus("missing", "Board found without a driver",
-                                   f"Windows has no driver for the {name}, so it has no COM port. {steps}")
+                                   tr("Windows has no driver for the {name}, so it has no COM port. {steps}",
+                                      name=name, steps=steps))
             return BoardStatus("missing", "No board plugged in",
                                "Plug the ESP32 in with a USB data cable. Charge-only cables show nothing.")
         port = device or self.radio_port(present)
@@ -99,13 +114,15 @@ class App:
         if isinstance(ident, board.Identity):
             if ident.current:
                 version = f" v{ident.firmware_version}" if ident.firmware_version else ""
-                return BoardStatus("ready", "Board ready", f"pokeldn firmware{version} answered.", port)
+                return BoardStatus("ready", "Board ready", tr("pokeldn firmware{version} answered.", version=version),
+                                   port)
             return BoardStatus("flash", "Firmware out of date",
                                "Flash the board to update it.", port)
         if ident == PORT_DENIED:
             group = "uucp" if os.path.exists("/etc/arch-release") else "dialout"
-            fix = (f"Add yourself to the {group} group (sudo usermod -aG {group} $USER), then log out and "
-                   "back in." if sys.platform.startswith("linux") else "Unplug and replug the board.")
+            fix = (tr("Add yourself to the {group} group (sudo usermod -aG {group} $USER), then log out and "
+                      "back in.", group=group) if sys.platform.startswith("linux") else
+                   tr("Unplug and replug the board."))
             return BoardStatus("denied", "No permission to open the board", fix, port)
         if ident == PORT_BUSY:
             return BoardStatus("busy", "Board port busy",
@@ -114,8 +131,9 @@ class App:
         if ident == NO_FIRMWARE:
             if board.wrong_port(found, self.chips.get(port, "")):
                 return BoardStatus("wrong-port", "Use the board's other USB port",
-                                   f"The {self.chips[port]} firmware talks over the native USB port. Move the "
-                                   "cable to the port marked USB (not COM or UART).", port)
+                                   tr("The {chip} firmware talks over the native USB port. Move the "
+                                      "cable to the port marked USB (not COM or UART).", chip=self.chips[port]),
+                                   port)
             return BoardStatus("flash", "No pokeldn firmware on the board",
                                "Flash the board. If you just flashed it, press its RESET (RST) button.",
                                port)
@@ -194,7 +212,7 @@ class App:
 
     async def copy(self, value: str) -> None:
         await self.clipboard.set(value)
-        self.page.show_dialog(ft.SnackBar(ft.Text("Copied"), duration=1500))
+        self.page.show_dialog(ft.SnackBar(ft.Text(tr("Copied")), duration=1500))
 
 
 def keys_found(path: str) -> bool:

@@ -307,6 +307,7 @@ PRESETS = (
           "that follows the starter."),
     _card("celebi", "Celebi", "A level 50 Celebi from the delivery man."),
     _card("master-ball", "Master Ball", "One Master Ball."),
+    _card("casino-coins", "Game Corner coins", "9999 coins for the Game Corner, again whenever you need more."),
     _card("altering-cave", "Altering Cave", "Changes which Pokemon live in Altering Cave."),
     _card("wish-egg", "Wish Egg", "One of six eggs that knows Wish, picked by the console."),
     _card("pokepark-egg", "PokePark egg", "One of fifteen eggs with special moves, picked by the console."),

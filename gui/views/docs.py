@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 import flet as ft
 
 from gui import theme as t
+from gui.i18n import tr
 from gui.views.widgets import MarkdownDocument
 from pokeldn.app.paths import ROOT
 
@@ -58,9 +59,9 @@ class DocsView:
                                   expand=True)
         self.control = ft.Row([
             t.panel(ft.Column([
-                t.panel_header("Docs", t.icon_button("external-link",
-                                                     lambda e: self.app.page.run_task(self.app.open_url, SITE),
-                                                     "Open the docs website")),
+                t.panel_header(tr("Docs"), t.icon_button("external-link",
+                                                         lambda e: self.app.page.run_task(self.app.open_url, SITE),
+                                                         tr("Open the docs website"))),
                 t.fade(self.nav),
             ], spacing=0, expand=True), width=t.SIDEBAR_WIDTH),
             t.surface(t.fade(self.scroll), radius=20, expand=True),
@@ -86,8 +87,8 @@ class DocsView:
             self.control.update()
 
     def render_nav(self) -> None:
-        rows = [self.row("Start here", "guide", 0)]
-        rows.append(ft.Container(t.text("Documentation", 11, t.FAINT, weight=ft.FontWeight.W_600),
+        rows = [self.row(tr("Start here"), "guide", 0)]
+        rows.append(ft.Container(t.text(tr("Documentation"), 11, t.FAINT, weight=ft.FontWeight.W_600),
                                  padding=ft.Padding(10, 14, 8, 4)))
 
         def walk(items, depth):

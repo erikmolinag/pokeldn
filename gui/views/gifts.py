@@ -9,6 +9,7 @@ import threading
 import flet as ft
 
 from gui import drop, theme as t
+from gui.i18n import tr
 from gui.views.pokemon import NamePicker
 from gui.views.saves import SavePanel
 from gui.views.widgets import PathField
@@ -38,7 +39,7 @@ def _chips(choices, value, on_change) -> ft.Row:
 
     def render(selected):
         row.controls = [ft.Container(
-            t.text(label, 12, t.TEXT if key == selected else t.MUTED, weight=ft.FontWeight.W_600),
+            t.text(tr(label), 12, t.TEXT if key == selected else t.MUTED, weight=ft.FontWeight.W_600),
             padding=ft.Padding(12, 6, 12, 6), border_radius=15,
             border=ft.Border.all(1, t.BLUE if key == selected else t.BORDER),
             bgcolor=t.SELECTED if key == selected else None, on_click=lambda e, k=key: pick(k))
@@ -63,7 +64,7 @@ class GiftBuilder:
         self.when = t.text("", 12, t.MUTED)
         self.effects = ft.Column(spacing=4)
         self.status = t.text("", 12, t.MUTED)
-        self.save_button = t.secondary_button("Save gift file", self._save, "download")
+        self.save_button = t.secondary_button(tr("Save gift file"), self._save, "download")
 
     # State
 
@@ -84,20 +85,21 @@ class GiftBuilder:
 
     def cards(self) -> list[ft.Control]:
         mode = self.value["mode"]
-        modes = t.segmented(gift_builder.modes(self.game), mode, self._mode, wrap=True)
+        modes = t.segmented([(key, tr(label), icon) for key, label, icon in gift_builder.modes(self.game)], mode,
+                            self._mode, wrap=True)
         body = {"preset": self.presets, "event": self.events, "build": self.editor, "file": self.file,
                 "save": lambda: SavePanel(self).control()}[mode]()
         self.show_summary()
         if mode == "save":
             summary = ft.Column([self.when, self.effects, self.status], spacing=10)
-            return [t.card("Gift", ft.Column([modes, body], spacing=14)), t.card("Before you start", summary)]
+            return [t.card(tr("Gift"), ft.Column([modes, body], spacing=14)), t.card(tr("Before you start"), summary)]
         actions = [self.save_button]
         if mode == "preset" and self.module.PRESET[self.value["preset"]].state is not None:
-            actions.insert(0, t.secondary_button("Customize", self._customize, "sliders-horizontal"))
+            actions.insert(0, t.secondary_button(tr("Customize"), self._customize, "sliders-horizontal"))
         summary = ft.Column([self.when, self.effects, self.status,
                              ft.Row(actions, alignment=ft.MainAxisAlignment.END)], spacing=10)
-        gift = drop.target(t.card("Gift", ft.Column([modes, body], spacing=14)), self._dropped)
-        return [gift, t.card("Before you send", summary)]
+        gift = drop.target(t.card(tr("Gift"), ft.Column([modes, body], spacing=14)), self._dropped)
+        return [gift, t.card(tr("Before you send"), summary)]
 
     def exts(self) -> tuple[str, ...]:
         return ("pokegift", "wc8") if self.game == "swsh" else ("pokegift", "wc3")
@@ -123,19 +125,19 @@ class GiftBuilder:
             tiles, body = [], []
             for preset in items:
                 if not hasattr(preset, "members"):
-                    tiles.append(self._tile(preset.label, preset.summary, preset is selected,
+                    tiles.append(self._tile(tr(preset.label), tr(preset.summary), preset is selected,
                                             lambda e, k=preset.key: self._pick(k)))
                     continue
                 on = preset.settings(self.value["options"].get(preset.key))["on"] if preset is selected else []
-                tiles += [self._tile(b.label, b.summary, b.key in on, lambda e, p=preset, k=b.key: self._toggle(p, k),
+                tiles += [self._tile(tr(b.label), tr(b.summary), b.key in on, lambda e, p=preset, k=b.key: self._toggle(p, k),
                                      settings=bool(b.options)) for b in preset.members]
                 if on:
                     body.append(self.boost_settings(preset))
             body.insert(0, t.grid(tiles))
             intro = getattr(self.module, "GROUP_INTROS", {}).get(group, "")
             if intro:
-                body.insert(0, t.text(intro, 12, t.MUTED))
-            sections.append(t.section(group, ft.Column(body, spacing=10)))
+                body.insert(0, t.text(tr(intro), 12, t.MUTED))
+            sections.append(t.section(tr(group), ft.Column(body, spacing=10)))
         return ft.Column(sections, spacing=14)
 
     def _tile(self, label, summary, active, on_click, settings=False) -> ft.Control:
@@ -143,7 +145,7 @@ class GiftBuilder:
         head = [t.text(label, 13, weight=ft.FontWeight.W_600, expand=True)]
         if settings:
             head.append(t.pixel_icon("sliders-horizontal", color=t.BLUE if active else t.FAINT,
-                                     tooltip="Has settings"))
+                                     tooltip=tr("Has settings")))
         return ft.Container(ft.Row([
             t.pixel_icon("checkbox-on" if active else "checkbox", color=t.BLUE if active else t.FAINT),
             ft.Column([ft.Row(head, spacing=6),
@@ -177,15 +179,15 @@ class GiftBuilder:
             rows = []
             for option in boost.options:
                 if not option.choices:
-                    rows.append(self.switch_row(option.label, option.key, option.help, mine))
+                    rows.append(self.switch_row(tr(option.label), option.key, tr(option.help), mine))
                 elif all(len(label) <= 24 for _, label in option.choices):
-                    rows.append(t.labeled_control(option.label, _chips(
+                    rows.append(t.labeled_control(tr(option.label), _chips(
                         option.choices, mine[option.key], lambda v, k=option.key, m=mine: self.edit(k, v, target=m))))
                 else:
-                    rows.append(t.labeled_control(option.label, t.dropdown(
-                        list(option.choices), mine[option.key],
+                    rows.append(t.labeled_control(tr(option.label), t.dropdown(
+                        [(key, tr(label)) for key, label in option.choices], mine[option.key],
                         on_select=lambda e, k=option.key, m=mine: self.edit(k, e.control.value, target=m))))
-            panels.append(ft.Container(ft.Column([t.text(boost.label, 13, weight=ft.FontWeight.W_600), *rows],
+            panels.append(ft.Container(ft.Column([t.text(tr(boost.label), 13, weight=ft.FontWeight.W_600), *rows],
                                                  spacing=12),
                                        padding=14, border_radius=10, border=ft.Border.all(1, t.BORDER)))
         used, room = preset.size(chosen), frlg.RESIDENT_AREA
@@ -193,16 +195,17 @@ class GiftBuilder:
             too_large = preset.built(chosen)[2]
         except ValueError:
             too_large = False
-        keep = (t.text("These boosts are always saved in your game. " + frlg.MOM_STEPS, 12, t.MUTED)
+        keep = (t.text(tr("These boosts are always saved in your game.") + " " + tr(frlg.MOM_STEPS), 12, t.MUTED)
                 if too_large or "hook-follower" in chosen["on"]
-                else self.switch_row(frlg.KEEP.label, "keep", frlg.KEEP.help, chosen))
+                else self.switch_row(tr(frlg.KEEP.label), "keep", tr(frlg.KEEP.help), chosen))
         meter = ft.Column([
-            ft.Row([t.text("Room on the console", 12, t.MUTED, expand=True),
-                    t.text(f"{used} of {room} bytes", 12, t.RED if used > room else t.MUTED)]),
+            ft.Row([t.text(tr("Room on the console"), 12, t.MUTED, expand=True),
+                    t.text(tr("{used} of {room} bytes", used=used, room=room), 12,
+                           t.RED if used > room else t.MUTED)]),
             ft.ProgressBar(value=min(used / room, 1), color=t.RED if used > room else t.BLUE,
                            bgcolor=t.BORDER, bar_height=4, border_radius=2)], spacing=4)
         common = ft.Container(ft.Column([keep, meter, t.text(
-            "The selected boosts run together. Sending a new selection replaces the boosts already running.",
+            tr("The selected boosts run together. Sending a new selection replaces the boosts already running."),
             12, t.MUTED)],
             spacing=12), padding=14, border_radius=10, border=ft.Border.all(1, t.BORDER))
         return ft.Column([*panels, common], spacing=10)
@@ -217,7 +220,7 @@ class GiftBuilder:
         """Every official card the game's builder ships, filtered by a search and a group."""
         cards = self.module.OFFICIAL.load()
         tiles = ft.Column(spacing=6, tight=True)
-        search = t.field(hint="Search: Pikachu, Master Ball, shiny...", value=self.value.get("event_search", ""))
+        search = t.field(hint=tr("Search: Pikachu, Master Ball, shiny..."), value=self.value.get("event_search", ""))
         group = {"value": self.value.get("event_group", "")}
 
         def render(update=True):
@@ -226,7 +229,7 @@ class GiftBuilder:
                      and all(w in f"{c['label']} {c['group']} {c['summary']}".casefold() for w in words)]
             tiles.controls = t.grid_rows([self._tile(c["label"], c["summary"], c["key"] == self.value["event"],
                                                      lambda e, k=c["key"]: self._event(k)) for c in shown])
-            count.value = f"{len(shown)} of {len(cards)} cards"
+            count.value = tr("{n} of {total} cards", n=len(shown), total=len(cards))
             if update:
                 tiles.update()
                 count.update()
@@ -242,8 +245,8 @@ class GiftBuilder:
         render(update=False)
         groups = _chips([("", "All")] + [(g, g) for g in self.module.OFFICIAL.GROUPS], group["value"],
                         lambda k: filtered("event_group", k))
-        intro = t.text("Real event cards from the projectpokemon EventsGallery archive. Each one passed the "
-                       "game's own card check.", 12, t.MUTED)
+        intro = t.text(tr("Real event cards from the projectpokemon EventsGallery archive. Each one passed the "
+                          "game's own card check."), 12, t.MUTED)
         listing = ft.Container(ft.Column([tiles], scroll=ft.ScrollMode.AUTO), height=440)
         return ft.Column([intro, search, groups, count, listing], spacing=10)
 
@@ -259,14 +262,14 @@ class GiftBuilder:
     def file(self) -> ft.Control:
         path = PathField(self.app.picker, lambda: os.path.expanduser("~"), self.value["file"], "file",
                          self.exts(), self._file, single_line=True, droppable=False)
-        controls = [t.text("A .pokegift someone shared, or a " + ("Sword/Shield .wc8" if self.game == "swsh"
-                                                                  else ".wc3") + " Wonder Card.", 12, t.MUTED),
+        controls = [t.text(tr("A .pokegift someone shared, or a {kind} Wonder Card.",
+                              kind="Sword/Shield .wc8" if self.game == "swsh" else ".wc3"), 12, t.MUTED),
                     path.control]
         if self.game == "frlg":
             icon = NamePicker(self.app, self.game, "species", str(self.value.get("icon") or ""),
                               self._icon, optional=True, names=SPECIES_FRLG)
-            controls.append(t.labeled_control("Card icon", icon.control))
-            controls.append(t.text("Leave empty to keep the file's own icon.", 12, t.MUTED))
+            controls.append(t.labeled_control(tr("Card icon"), icon.control))
+            controls.append(t.text(tr("Leave empty to keep the file's own icon."), 12, t.MUTED))
         return ft.Column(controls, spacing=8)
 
     def _icon(self, value) -> None:
@@ -282,7 +285,8 @@ class GiftBuilder:
 
     def editor(self) -> ft.Control:
         kind = self.state.get("kind")
-        kinds = t.segmented(list(self.module.KINDS), kind, lambda k: self.edit("kind", k, rebuild=True))
+        kinds = t.segmented([(key, tr(label), icon) for key, label, icon in self.module.KINDS], kind,
+                            lambda k: self.edit("kind", k, rebuild=True))
         form = getattr(self, f"{self.game}_{kind}")()
         return ft.Column([kinds, form], spacing=14)
 
@@ -318,7 +322,7 @@ class GiftBuilder:
             def changed(v):
                 target["moves"][n] = _number(v)
                 self.commit()
-            return t.labeled_control(f"Move {n + 1}", NamePicker(
+            return t.labeled_control(tr("Move {n}", n=n + 1), NamePicker(
                 self.app, self.game, "move", str(target["moves"][n] or ""), changed).control, expand=True)
         return ft.Column([ft.Row([picker(0), picker(1)], spacing=10), ft.Row([picker(2), picker(3)], spacing=10)],
                          spacing=10)
@@ -333,31 +337,31 @@ class GiftBuilder:
             def changed(e):
                 body[n] = e.control.value
                 self.commit()
-            return t.field(value=body[n], hint=f"Line {n + 1}", on_change=changed)
-        giver = t.dropdown([(key, f"{who}, {where}") for key, who, where, *_ in frlg.GIVERS],
+            return t.field(value=body[n], hint=tr("Line {n}", n=n + 1), on_change=changed)
+        giver = t.dropdown([(key, f"{tr(who)}, {tr(where)}") for key, who, where, *_ in frlg.GIVERS],
                            self.state.get("giver", "deliveryman"),
                            on_select=lambda e: self.edit("giver", e.control.value, rebuild=True))
         card_form = ft.Column([
-            ft.Row([self.text_field("Title", "title", card), self.text_field("Subtitle", "subtitle", card)],
+            ft.Row([self.text_field(tr("Title"), "title", card), self.text_field(tr("Subtitle"), "subtitle", card)],
                    spacing=10),
-            t.labeled_control("Text on the card", ft.Column([line(n) for n in range(4)], spacing=6,
+            t.labeled_control(tr("Text on the card"), ft.Column([line(n) for n in range(4)], spacing=6,
                                                             horizontal_alignment=ft.CrossAxisAlignment.STRETCH),
                               horizontal_alignment=ft.CrossAxisAlignment.STRETCH),
-            ft.Row([self.name_field("Icon", "species", "icon", card, optional=False),
-                    self.number_field("Card id", "flag_id", card)], spacing=10),
-            self.switch_row("Can be received again", "repeatable", "Otherwise once per save.", card),
-            self.switch_row("The player can share it", "shareable", "Mystery Gift, Wonder Cards, Send.", card),
+            ft.Row([self.name_field(tr("Icon"), "species", "icon", card, optional=False),
+                    self.number_field(tr("Card id"), "flag_id", card)], spacing=10),
+            self.switch_row(tr("Can be received again"), "repeatable", tr("Otherwise once per save."), card),
+            self.switch_row(tr("The player can share it"), "shareable", tr("Mystery Gift, Wonder Cards, Send."), card),
         ], spacing=10)
         return ft.Column([
-            t.section("The card", card_form),
-            t.section("Who hands it over", giver),
-            t.section("What happens", self.frlg_steps()),
+            t.section(tr("The card"), card_form),
+            t.section(tr("Who hands it over"), giver),
+            t.section(tr("What happens"), self.frlg_steps()),
         ], spacing=18)
 
     def frlg_steps(self) -> ft.Control:
         steps = self.state["steps"]
         rows = [self.frlg_step(n, step) for n, step in enumerate(steps)]
-        adders = ft.Row([t.secondary_button(label, lambda e, k=key: self._add_step(k), "plus")
+        adders = ft.Row([t.secondary_button(tr(label), lambda e, k=key: self._add_step(k), "plus")
                          for key, label in frlg.STEPS], spacing=6, wrap=True, run_spacing=6)
         return ft.Column([*rows, adders], spacing=10)
 
@@ -365,24 +369,25 @@ class GiftBuilder:
         kind = step["type"]
         label = dict(frlg.STEPS)[kind]
         if kind in ("pokemon", "battle"):
-            fields = [ft.Row([self.name_field("Species", "species", "species", step, optional=False),
-                              self.number_field("Level", "level", step, 72),
-                              self.name_field("Held item", "item", "item", step)], spacing=10)]
+            fields = [ft.Row([self.name_field(tr("Species"), "species", "species", step, optional=False),
+                              self.number_field(tr("Level"), "level", step, 72),
+                              self.name_field(tr("Held item"), "item", "item", step)], spacing=10)]
             if kind == "pokemon":
                 fields.append(self.moves(step))
         elif kind == "egg":
-            fields = [self.name_field("Species", "species", "species", step, optional=False)]
+            fields = [self.name_field(tr("Species"), "species", "species", step, optional=False)]
         elif kind == "item":
-            fields = [ft.Row([self.name_field("Item", "item", "item", step, optional=False),
-                              self.number_field("How many", "quantity", step, 72)], spacing=10)]
+            fields = [ft.Row([self.name_field(tr("Item"), "item", "item", step, optional=False),
+                              self.number_field(tr("How many"), "quantity", step, 72)], spacing=10)]
         else:
-            fields = [self.text_field("Message", "text", step, multiline=True, min_lines=2, max_lines=4,
-                                      hint="{PLAYER} is the player's name. A box holds two lines.")]
-        tools = ft.Row([t.icon_button("chevron-up", lambda e: self._move_step(n, -1), "Earlier", disabled=n == 0),
-                        t.icon_button("chevron-down", lambda e: self._move_step(n, 1), "Later",
+            fields = [self.text_field(tr("Message"), "text", step, multiline=True, min_lines=2, max_lines=4,
+                                      hint=tr("{PLAYER} is the player's name. A box holds two lines."))]
+        tools = ft.Row([t.icon_button("chevron-up", lambda e: self._move_step(n, -1), tr("Earlier"),
+                                      disabled=n == 0),
+                        t.icon_button("chevron-down", lambda e: self._move_step(n, 1), tr("Later"),
                                       disabled=n == len(self.state["steps"]) - 1),
-                        t.icon_button("close", lambda e: self._remove_step(n), "Remove")], spacing=0)
-        head = ft.Row([t.text(f"{n + 1}. {label}", 12, t.SOFT, weight=ft.FontWeight.W_600, expand=True), tools],
+                        t.icon_button("close", lambda e: self._remove_step(n), tr("Remove"))], spacing=0)
+        head = ft.Row([t.text(f"{n + 1}. {tr(label)}", 12, t.SOFT, weight=ft.FontWeight.W_600, expand=True), tools],
                       vertical_alignment=ft.CrossAxisAlignment.CENTER)
         return ft.Container(ft.Column([head, *fields], spacing=8), padding=12, border_radius=10,
                             border=ft.Border.all(1, t.BORDER))
@@ -410,12 +415,12 @@ class GiftBuilder:
             news["lines"] = e.control.value.split("\n")[:10]
             self.commit()
         return ft.Column([
-            ft.Row([self.text_field("Title", "title", news), self.number_field("News id", "id", news)], spacing=10),
-            t.labeled_control("Text, up to ten lines", t.field(value="\n".join(news.get("lines", ())),
+            ft.Row([self.text_field(tr("Title"), "title", news), self.number_field(tr("News id"), "id", news)], spacing=10),
+            t.labeled_control(tr("Text, up to ten lines"), t.field(value="\n".join(news.get("lines", ())),
                                                                multiline=True, min_lines=4, max_lines=10,
                                                                on_change=lines)),
-            t.text("A console keeps news only when it differs from the one it holds; change the id to send "
-                   "the same text again.", 12, t.MUTED),
+            t.text(tr("A console keeps news only when it differs from the one it holds; change the id to send "
+                      "the same text again."), 12, t.MUTED),
         ], spacing=10)
 
     def frlg_code(self) -> ft.Control:
@@ -428,45 +433,46 @@ class GiftBuilder:
         binary = PathField(self.app.picker, lambda: os.path.expanduser("~"), code.get("binary", ""), "file",
                            ("bin",), lambda v: self.edit("binary", v, target=code), single_line=True)
         return ft.Column([
-            t.text("ARM code runs on the console while it receives, every frame until it returns 1. "
-                   "A fault or a loop hangs the Mystery Gift menu, so it is run offline first.", 12, t.MUTED),
-            t.labeled_control("Assembly", source, horizontal_alignment=ft.CrossAxisAlignment.STRETCH),
+            t.text(tr("ARM code runs on the console while it receives, every frame until it returns 1. "
+                      "A fault or a loop hangs the Mystery Gift menu, so it is run offline first."), 12, t.MUTED),
+            t.labeled_control(tr("Assembly"), source, horizontal_alignment=ft.CrossAxisAlignment.STRETCH),
             self._toolchain_status(),
-            t.labeled_control("Or a prebuilt .bin (used instead of the assembly)", binary.control),
-            ft.Row([t.labeled_control("Built for", t.dropdown(
-                        [("any", "Any cartridge")] + list(frlg.CARTRIDGES.items()), code.get("build") or "any",
+            t.labeled_control(tr("Or a prebuilt .bin (used instead of the assembly)"), binary.control),
+            ft.Row([t.labeled_control(tr("Built for"), t.dropdown(
+                        [("any", tr("Any cartridge"))] + [(k, tr(v)) for k, v in frlg.CARTRIDGES.items()],
+                        code.get("build") or "any",
                         on_select=lambda e: self.edit("build", "" if e.control.value == "any" else e.control.value,
                                                       target=code)), expand=True),
-                    self.text_field("Expected answer", "expect", code, width=140, hint="any"),
-                    self.text_field("Bytes sent back", "dump_size", code, width=140, hint="4")], spacing=10),
-            ft.Row([t.secondary_button("Check offline", self._check, "play"), ft.Container(self.check_line,
+                    self.text_field(tr("Expected answer"), "expect", code, width=140, hint=tr("any")),
+                    self.text_field(tr("Bytes sent back"), "dump_size", code, width=140, hint="4")], spacing=10),
+            ft.Row([t.secondary_button(tr("Check offline"), self._check, "play"), ft.Container(self.check_line,
                                                                                             expand=True)]),
             self.hex_view,
         ], spacing=10)
 
     def _toolchain_status(self) -> ft.Control:
         if custom_code.toolchain():
-            return t.text("Assembled with the GNU Arm toolchain on this computer.", 12, t.MUTED)
+            return t.text(tr("Assembled with the GNU Arm toolchain on this computer."), 12, t.MUTED)
         command, page = custom_code.install_hint()
         run = self.app.page.run_task
         if command:
             how = ft.Row([ft.Container(t.text(command, 12, t.TEXT, font_family=t.MONO, selectable=True),
                                        expand=True),
-                          t.icon_button("copy", lambda e: run(self.app.copy, command), "Copy")],
+                          t.icon_button("copy", lambda e: run(self.app.copy, command), tr("Copy"))],
                          vertical_alignment=ft.CrossAxisAlignment.CENTER)
-            steps = "paste this in a terminal, then check again"
+            steps = tr("paste this in a terminal, then check again")
         else:
-            how, steps = None, "download it from Arm's page, then check again"
-        actions = ft.Row([t.secondary_button("Check again", lambda e: self.commit(rebuild=True), "refresh"),
-                          t.link_button("Homebrew" if page == "https://brew.sh" else "Arm's download page",
+            how, steps = None, tr("download it from Arm's page, then check again")
+        actions = ft.Row([t.secondary_button(tr("Check again"), lambda e: self.commit(rebuild=True), "refresh"),
+                          t.link_button("Homebrew" if page == "https://brew.sh" else tr("Arm's download page"),
                                         lambda e: run(self.app.open_url, page))], spacing=8)
         return t.surface(ft.Column([
-            t.text("Typing assembly here needs the free GNU Arm assembler. Install it once: "
-                   f"{steps}. A prebuilt .bin works without it.", 12, t.AMBER),
+            t.text(tr("Typing assembly here needs the free GNU Arm assembler. Install it once: "
+                      "{steps}. A prebuilt .bin works without it.", steps=steps), 12, t.AMBER),
             *([how] if how else []), actions], spacing=8), padding=12)
 
     def _check(self, e) -> None:
-        self.check_line.value, self.check_line.color = "Checking…", t.MUTED
+        self.check_line.value, self.check_line.color = tr("Checking…"), t.MUTED
         self.check_line.update()
         code_state = dict(self.state["code"])
 
@@ -488,17 +494,17 @@ class GiftBuilder:
     # Sword / Shield
 
     def swsh_pokemon(self, egg=False) -> ft.Control:
-        rows = [ft.Row([self.name_field("Species", "species", "species", optional=False),
-                        *([] if egg else [self.number_field("Level", "level", width=72)])], spacing=10)]
+        rows = [ft.Row([self.name_field(tr("Species"), "species", "species", optional=False),
+                        *([] if egg else [self.number_field(tr("Level"), "level", width=72)])], spacing=10)]
         if not egg:
-            rows += [ft.Row([self.name_field("Held item", "bag", "item"), self.name_field("Ball", "ball", "ball")],
+            rows += [ft.Row([self.name_field(tr("Held item"), "bag", "item"), self.name_field(tr("Ball"), "ball", "ball")],
                             spacing=10),
-                     ft.Row([self.text_field("Nickname", "nickname", limit=12),
-                             self.text_field("OT", "ot", limit=12)], spacing=10),
-                     self.switch_row("Shiny", "shiny", "The Pokemon arrives shiny."),
+                     ft.Row([self.text_field(tr("Nickname"), "nickname", limit=12),
+                             self.text_field(tr("OT"), "ot", limit=12)], spacing=10),
+                     self.switch_row(tr("Shiny"), "shiny", tr("The Pokemon arrives shiny.")),
                      self.switch_row("Gigantamax", "gigantamax",
-                                     "It can Gigantamax; only species with a Gigantamax form.")]
-        rows += [self.moves(self.state), self.number_field("Card id", "card_id")]
+                                     tr("It can Gigantamax; only species with a Gigantamax form."))]
+        rows += [self.moves(self.state), self.number_field(tr("Card id"), "card_id")]
         return ft.Column(rows, spacing=10)
 
     def swsh_egg(self) -> ft.Control:
@@ -519,19 +525,19 @@ class GiftBuilder:
             def remove(e):
                 del items[n]
                 self.commit(rebuild=True)
-            return ft.Row([t.labeled_control("Item", NamePicker(self.app, "swsh", "bag", str(items[n][0] or ""),
+            return ft.Row([t.labeled_control(tr("Item"), NamePicker(self.app, "swsh", "bag", str(items[n][0] or ""),
                                                                 item, optional=False).control, expand=True),
-                           t.labeled_control("How many", t.field(value=str(items[n][1]), mono=True, width=72, digits=True,
+                           t.labeled_control(tr("How many"), t.field(value=str(items[n][1]), mono=True, width=72, digits=True,
                                                                  on_change=quantity)),
-                           ft.Container(t.icon_button("close", remove, "Remove"), height=t.CONTROL_HEIGHT,
+                           ft.Container(t.icon_button("close", remove, tr("Remove")), height=t.CONTROL_HEIGHT,
                                         alignment=ft.Alignment.CENTER)],
                           spacing=10, vertical_alignment=ft.CrossAxisAlignment.END)
 
         def add(e):
             items.append([1, 1])
             self.commit(rebuild=True)
-        adder = [t.secondary_button("Add an item", add, "plus")] if len(items) < 6 else []
-        return ft.Column([*(row(n) for n in range(len(items))), *adder, self.number_field("Card id", "card_id")],
+        adder = [t.secondary_button(tr("Add an item"), add, "plus")] if len(items) < 6 else []
+        return ft.Column([*(row(n) for n in range(len(items))), *adder, self.number_field(tr("Card id"), "card_id")],
                          spacing=10)
 
     def swsh_clothing(self) -> ft.Control:
@@ -546,16 +552,16 @@ class GiftBuilder:
         rows = [ft.Row([t.text(o.label, 13, expand=True),
                         t.switch(o.key in chosen, lambda e, k=o.key: toggle(k, e.control.value))])
                 for o in swsh.OUTFITS]
-        return ft.Column([t.text("Official outfits. A card holds six pieces for each gender; the player gets the "
-                                 "version for their own.", 12, t.MUTED), *rows,
-                          self.number_field("Card id", "card_id")], spacing=8)
+        return ft.Column([t.text(tr("Official outfits. A card holds six pieces for each gender; the player gets the "
+                                    "version for their own."), 12, t.MUTED), *rows,
+                          self.number_field(tr("Card id"), "card_id")], spacing=8)
 
     def swsh_money(self) -> ft.Control:
-        return ft.Row([self.number_field("Money", "money", width=120), self.number_field("Card id", "card_id")],
+        return ft.Row([self.number_field(tr("Money"), "money", width=120), self.number_field(tr("Card id"), "card_id")],
                       spacing=10)
 
     def swsh_bp(self) -> ft.Control:
-        return ft.Row([self.number_field("Battle Points", "bp"), self.number_field("Card id", "card_id")],
+        return ft.Row([self.number_field(tr("Battle Points"), "bp"), self.number_field(tr("Card id"), "card_id")],
                       spacing=10)
 
     # Summary
@@ -586,7 +592,7 @@ class GiftBuilder:
             preset = self.module.PRESET[self.value["preset"]]
             when, lines = getattr(preset, "when", ""), [preset.summary]
             if hasattr(preset, "members"):
-                when = "Starts on the console as soon as it is received."
+                when = tr("Starts on the console as soon as it is received.")
                 lines = preset.effects(self.value["options"].get(preset.key))
             elif preset.state is not None:
                 when, lines = self.module.describe(preset.state, self.name)
@@ -599,18 +605,18 @@ class GiftBuilder:
             when, lines = "", []
         problem = gift_builder.problem(self.tool, self.value)
         if problem:
-            self.status.value, self.status.color = problem, t.RED
+            self.status.value, self.status.color = tr(problem), t.RED
         elif mode == "save":
             pass
         elif mode != "preset" or self.module.PRESET[self.value["preset"]].args == ():
             gift = gift_builder.compile(self.tool, self.value)
             targets = [frlg.CARTRIDGES.get(code, "Sword and Shield") for code in gift.variants]
-            self.status.value = "Works on " + ", ".join(targets) + "."
+            self.status.value = tr("Works on {targets}.", targets=", ".join(tr(target) for target in targets))
             if mode == "file":
                 lines = [gift.name]
-        self.when.value = when
+        self.when.value = tr(when)
         self.when.visible = bool(when)
-        self.effects.controls = [ft.Row([t.pixel_icon("check", color=t.GREEN), t.text(line, 13, expand=True)],
+        self.effects.controls = [ft.Row([t.pixel_icon("check", color=t.GREEN), t.text(tr(line), 13, expand=True)],
                                         spacing=8) for line in lines]
         if update:
             for control in (self.when, self.effects, self.status):
@@ -619,21 +625,21 @@ class GiftBuilder:
     def save_summary(self) -> tuple[str, list[str]]:
         chosen = self.value["save"]
         if chosen["action"] == "backup":
-            return ("On the console: Mystery Gift, Wonder Cards, Friend, then POKELDN.",
-                    ["The whole save comes to Your saves, named after the trainer.",
-                     "The console shows a message and keeps its save as it was."])
+            return (tr("On the console: Mystery Gift, Wonder Cards, Friend, then POKELDN."),
+                    [tr("The whole save comes to Your saves, named after the trainer."),
+                     tr("The console shows a message and keeps its save as it was.")])
         entry = saves.entry(chosen["file"]) if chosen["file"] else None
         if entry is None:
             return "", []
-        return ("On the console: Mystery Gift, Wonder Cards, Friend, then POKELDN. Back its save up first.",
-                [f"{entry.name} replaces the console's save.",
-                 "The console checks every part, loads it and saves; anything short of that keeps its save.",
-                 "Then choose CONTINUE on the title screen."])
+        return (tr("On the console: Mystery Gift, Wonder Cards, Friend, then POKELDN. Back its save up first."),
+                [tr("{name} replaces the console's save.", name=entry.name),
+                 tr("The console checks every part, loads it and saves; anything short of that keeps its save."),
+                 tr("Then choose CONTINUE on the title screen.")])
 
     async def select_native_build(self, gift):
         loop = asyncio.get_running_loop()
         chosen = loop.create_future()
-        options = [(code, frlg.CARTRIDGES[code]) for code in gift.variants]
+        options = [(code, tr(frlg.CARTRIDGES[code])) for code in gift.variants]
         picker = t.dropdown(options, options[0][0])
 
         async def finish(e):
@@ -651,19 +657,19 @@ class GiftBuilder:
                 chosen.set_result(None)
 
         self.app.page.show_dialog(t.dialog(
-            title=t.text("Export for which cartridge?", 18, t.TEXT),
+            title=t.text(tr("Export for which cartridge?"), 18, t.TEXT),
             content=ft.Column([
-                t.text("A .wc3 holds one cartridge's gift. Choose its version and language. "
-                       "A .pokegift keeps every supported cartridge together.", 13, t.MUTED),
-                t.labeled_control("Cartridge", picker),
+                t.text(tr("A .wc3 holds one cartridge's gift. Choose its version and language. "
+                          "A .pokegift keeps every supported cartridge together."), 13, t.MUTED),
+                t.labeled_control(tr("Cartridge"), picker),
             ], tight=True, spacing=12, width=420),
-            actions=[t.button("Cancel", cancel, filled=False), t.button("Export", finish)],
+            actions=[t.button(tr("Cancel"), cancel, filled=False), t.button(tr("Export"), finish)],
             on_dismiss=dismissed))
         return await chosen
 
     async def _save(self, e) -> None:
         self.save_button.disabled = True
-        self.status.value, self.status.color = "Preparing gift file…", t.MUTED
+        self.status.value, self.status.color = tr("Preparing gift file…"), t.MUTED
         self.save_button.update()
         self.status.update()
         tool, extra = self.tool, dict(self.games.extra)
@@ -672,7 +678,7 @@ class GiftBuilder:
             gift = await asyncio.to_thread(gift_files.build, tool, values, extra, self.app.settings)
             native = "wc8" if self.game == "swsh" else "wc3"
             path = await self.app.picker.save_file(
-                dialog_title="Save Mystery Gift", file_name=f"{tool.key}.pokegift",
+                dialog_title=tr("Save Mystery Gift"), file_name=f"{tool.key}.pokegift",
                 file_type=ft.FilePickerFileType.CUSTOM, allowed_extensions=[gifts.EXTENSION, native])
             if path:
                 path += "" if path.lower().endswith((".pokegift", f".{native}")) else ".pokegift"
@@ -684,11 +690,11 @@ class GiftBuilder:
                         self.show_summary()
                         return
                 gifts.save(path, gift, build=build)
-                self.status.value = f"Saved {path}"
+                self.status.value = tr("Saved {path}", path=path)
             else:
                 self.show_summary()
         except (OSError, ValueError, pokemon.BuilderError) as exc:
-            self.status.value, self.status.color = str(exc), t.RED
+            self.status.value, self.status.color = tr(str(exc)), t.RED
         finally:
             self.save_button.disabled = False
             if self.games.tool is tool:

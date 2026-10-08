@@ -1,10 +1,24 @@
 """The Pokemon files a run saved in the Received folder. Every tool's output path carries the run's
 {stamp} (pokeldn.app.catalog); a launcher adds a suffix per trade, or writes into a folder so named."""
+import json
 import os
 import re
 
 POKEMON = re.compile(r"\.(pk3|ek3|pb7|pk8|pb8|pa8|pk9|pa9)$", re.IGNORECASE)
 DONE = re.compile(r"^\[done\] trade (\d+) complete$")   # pokeldn.ldn.show_done
+TRAINER = re.compile(r"\[trainer\] (\{.*\})\s*$")       # pokeldn.frlg.link.linkplayer.trainer_report
+
+
+def trainer_found(line: str) -> dict | None:
+    """The console's trainer (name, tid, sid, gender, language, version) from a host's `[trainer]` line."""
+    match = TRAINER.search(line)
+    if not match:
+        return None
+    try:
+        data = json.loads(match.group(1))
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) and {"name", "tid", "sid"} <= data.keys() else None
 
 
 # pokeldn.frlg.gift.host_mg_app.SaveTransferHostApplication._progress

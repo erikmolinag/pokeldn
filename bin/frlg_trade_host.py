@@ -42,6 +42,11 @@ def build_parser(file_config=None, *, shared_path=None, local_path=None):
                         help="comma-separated 0-based offered slots for multiple trades")
     parser.add_argument("--trades", type=int, default=1, choices=range(1, 7), metavar="N")
     parser.add_argument(
+        "--identify", action="store_true",
+        help="read the console's trainer (name, TID, SID) and let the player Cancel: the console sends its "
+             "LinkPlayer, with the full 32-bit trainer id, on joining [link.c:345], before any Pokemon is "
+             "picked. Without MON files, a placeholder Pidgey fills the host party")
+    parser.add_argument(
         "--union-room", action="store_true",
         help="host for the Union Room (the middle NPC on Pokemon Center 2F) instead of the trade "
              "centre's third NPC; use with --union-room-keepalive 120 and --board-type")
@@ -159,6 +164,18 @@ def build_run_config(parser, args):
         parser.error(str(exc))
 
 
+PLACEHOLDER_SPECIES = 16     # Pidgey
+PLACEHOLDER_TRAINER = {"ot": "POKELDN", "tid": 2470, "sid": 46848, "language": 2, "gender": 0}
+
+
+def identify_placeholder():
+    """A legal level-3 Pidgey for --identify's party: the console must see one Pokemon to open the
+    trade menu, where the player only Cancels."""
+    made = pokemon_service.SERVICE.make("frlg", PLACEHOLDER_SPECIES, PLACEHOLDER_TRAINER, level=3,
+                                        version="firered")
+    return made["file"]
+
+
 def main(argv=None):
     try:
         file_config, shared_path, local_path = \
@@ -169,6 +186,8 @@ def main(argv=None):
     parser = build_parser(
         file_config, shared_path=shared_path, local_path=local_path)
     args = parser.parse_args(argv)
+    if args.identify and not args.party and not args.print_effective_config:
+        args.party = [identify_placeholder()]
     if args.party and not getattr(args, "print_effective_config", False):
         args.party = [pokemon_service.prepare_file("frlg", p) for p in args.party]
     if args.print_effective_config:

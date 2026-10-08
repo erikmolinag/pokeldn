@@ -150,6 +150,25 @@ FRLG = Game("frlg", "FireRed & LeafGreen", "FRLG", "frlg.md", (
                 "{received}/frlg-dump-{stamp}.bin"), doc="frlg_gift.md"),
 ))
 
+# poke-app: read the player's trainer before anything else. The trade host's --identify mode prints the
+# console's LinkPlayer as a `[trainer]` line (pokeldn.app.received.trainer_found) and offers only a
+# placeholder; the player Cancels on the trade menu.
+FRLG_TRAINER = Tool("frlg-trainer", "Read my trainer", "bin/frlg_trade_host.py",
+                    "Read your trainer name, Trainer ID and Secret ID from the console, so the Pokemon built "
+                    "here are yours.",
+                    ("Start, then wait for 'Hosting Direct Corner' in the log.",
+                     f"{FRLG_PATH}, Join Group, then pick POKELDN.",
+                     "Your trainer card appears here as soon as the console joins.",
+                     "On the trade menu, choose Cancel and Yes: nothing is traded."),
+                    (Field("--channel", "Channel", "choice", default="11", choices=CHANNELS, help=CHANNEL_HELP,
+                           hidden=True),),
+                    fixed=("--live", "--phy", "auto", "--identify", "--slot", "0", "--ot", "{ot}",
+                           "--id", "{tid}:{sid}", "--out", "{received}/frlg-identify-{stamp}.pk3"),
+                    doc="frlg_link.md")
+
+# The desktop app's own list: FireRed and LeafGreen only, the trainer reader first.
+APP_GAMES = (Game(FRLG.key, FRLG.name, FRLG.short, FRLG.doc, (FRLG_TRAINER, *FRLG.tools)),)
+
 LGPE_STEPS = "X, Communicate, Local Communication, Trade, enter the same link code, then search."
 
 LGPE = Game("lgpe", "Let's Go Pikachu & Eevee", "LGPE", "lgpe.md", (

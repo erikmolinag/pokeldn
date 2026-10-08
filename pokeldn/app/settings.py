@@ -33,6 +33,11 @@ class Settings:
     language: int = 2
     board_names: dict = field(default_factory=dict)   # MAC -> name the user gave the board
     tool_values: dict = field(default_factory=dict)   # tool key -> {"values": {...}, "extra": {...}}
+    # poke-app: the player's own FireRed/LeafGreen trainer, read from the console (or typed in). Built
+    # Pokemon carry it as their original trainer, so the game treats them as caught in this save. The
+    # fields above stay pokeldn's own identity on the link.
+    my_trainer: dict = field(default_factory=dict)    # name tid sid gender language version source
+    ui_language: str = "es"                           # es or en
 
     def __post_init__(self) -> None:
         if self.switch_tid is None or self.switch_sid is None:
@@ -66,6 +71,26 @@ class Settings:
     def trainer(self, game: str) -> dict:
         tid, sid = self.ids(game)
         return {"ot": self.name(game), "tid": tid, "sid": sid, "language": self.language, "gender": 0}
+
+    def owner(self, game: str) -> dict:
+        """The trainer built Pokemon belong to: the player's own when known, else pokeldn's."""
+        mine = self.my_trainer
+        if game == "frlg" and mine.get("name") and "tid" in mine and "sid" in mine:
+            return {"ot": mine["name"], "tid": int(mine["tid"]), "sid": int(mine["sid"]),
+                    "language": int(mine.get("language") or self.language), "gender": int(mine.get("gender") or 0)}
+        return self.trainer(game)
+
+    def set_my_trainer(self, found: dict, source: str) -> bool:
+        """Keep the trainer a console reported (pokeldn.app.received.trainer_found); True if it changed."""
+        mine = {"name": str(found["name"]), "tid": int(found["tid"]) & 0xFFFF, "sid": int(found["sid"]) & 0xFFFF,
+                "gender": int(found.get("gender") or 0) & 1, "language": int(found.get("language") or 2),
+                "version": str(found.get("version") or ""), "source": source}
+        if {k: v for k, v in self.my_trainer.items() if k != "source"} == {k: v for k, v in mine.items()
+                                                                          if k != "source"}:
+            return False
+        self.my_trainer = mine
+        self.save()
+        return True
 
 
 def switch_ids_valid(tid: int, sid: int) -> bool:

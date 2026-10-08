@@ -2,6 +2,7 @@
 strcmp-validates both GameFreak magics [link.c:1626-1631] and drops to CB2_LinkError on mismatch;
 the wireless path pulls it as a fixed 200-byte buffer (count=17) with the block at offset 0."""
 
+import json
 from dataclasses import dataclass
 
 from pokeldn.frlg.text import charmap, easychat
@@ -120,3 +121,15 @@ def parse_block(b):
     magic2 = b[44:60]
     ok = (magic1[:14] == b"GameFreak inc." and magic2[:14] == b"GameFreak inc.")
     return LinkPlayer.unpack(struct), ok
+
+
+VERSION_NAMES = {VERSION_FIRE_RED & 0xFF: "firered", VERSION_LEAF_GREEN & 0xFF: "leafgreen"}
+
+
+def trainer_report(lp):
+    """The console's trainer as one log line the desktop app reads: "[trainer] {json}". The 32-bit id is
+    playerTrainerId[0..3], TID in the low half and SID in the high half [link.c:345]."""
+    return "[trainer] " + json.dumps({
+        "name": lp.name, "tid": lp.trainer_id & 0xFFFF, "sid": (lp.trainer_id >> 16) & 0xFFFF,
+        "gender": lp.gender, "language": lp.language, "version": VERSION_NAMES.get(lp.version & 0xFF, ""),
+    }, ensure_ascii=False)

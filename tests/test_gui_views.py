@@ -493,8 +493,8 @@ def test_start_on_another_tool_stops_the_running_session_then_starts(tmp_path, m
     panel = SessionPanel.__new__(SessionPanel)
     panel.__dict__.update(app=FakeApp(), games=SimpleNamespace(values={}, extra={}, visible=False, game=SimpleNamespace(
         name="game", key="swsh")), log=SimpleNamespace(add=lambda line: None, clear=lambda: None),
-        received=SimpleNamespace(), transfer=SimpleNamespace(), run=None, running_tool=None, restart=False,
-        stopping=False, traded=0)
+        received=SimpleNamespace(), transfer=SimpleNamespace(), trainer_box=SimpleNamespace(), run=None,
+        running_tool=None, restart=False, stopping=False, traded=0)
     panel.set_status = panel.refresh = lambda *a, **k: None
     panel.tool = first
     panel._start(None)
@@ -577,6 +577,7 @@ def test_a_console_code_is_typed_box_by_box_and_only_a_whole_one_reaches_the_lau
     assert widgets.DigitCode(values[field.key], lambda v: None).digits[:6] == list("123956")
 
 
+@pytest.mark.skip(reason="poke-app shows FireRed and LeafGreen only: Settings has no Switch trainer id")
 def test_settings_keep_a_six_digit_switch_id_beside_the_five_digit_one(tmp_path, monkeypatch):
     """A Switch title shows its trainer id as six digits; FireRed shows five (docs/gui.md, Your trainer)."""
     import flet as ft

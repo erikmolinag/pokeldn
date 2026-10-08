@@ -3,44 +3,57 @@ import flet.canvas as cv
 
 from gui.icons import icon as pixel_icon
 
-BG = "#0B0B0D"
-PANEL = "#1C1C1F"
-CARD = "#161618"
-FIELD = "#232326"
-HOVER = "#2C2C30"
-OUTLINE = "#262629"
-BORDER = "#2E2E32"
-EDGE = "#3A3A3F"
-DIVIDER = "#252528"
-TEXT = "#F5F5F7"
-SOFT = "#D1D1D6"
-MUTED = "#A1A1A6"
-FAINT = "#86868B"
-BLUE = "#47AEFA"
-RED = "#FD474D"
-GREEN = "#3DD68C"
-AMBER = "#FF9F0A"
-SELECTED = ft.Colors.with_opacity(0.14, BLUE)
+# poke-app: a light, rounded look in the spirit of Pokemon HOME, with the Poke Ball's red as the one accent.
+BG = "#EDF1F7"
+PANEL = "#FFFFFF"
+CARD = "#F4F6FA"
+FIELD = "#ECEFF4"
+HOVER = "#E3E8EF"
+OUTLINE = "#E4E8EE"
+BORDER = "#D8DEE7"
+EDGE = "#C7CFDA"
+DIVIDER = "#E6EAF0"
+TEXT = "#1C2333"
+SOFT = "#384157"
+MUTED = "#677189"
+FAINT = "#98A0B1"
+ACCENT = "#E3350D"            # Poke Ball red
+BLUE = ACCENT                 # upstream's name for the accent: selection, focus, the filled button
+INFO = "#2F6FED"              # running and in-progress states
+RED = "#B42318"               # errors and Stop
+GREEN = "#088A4F"
+AMBER = "#C25E00"
+INK = "#FFFFFF"               # text on the accent
+SHADOW = ft.BoxShadow(blur_radius=24, spread_radius=0, offset=ft.Offset(0, 6),
+                      color=ft.Colors.with_opacity(0.07, "#1C2333"))
+SELECTED = ft.Colors.with_opacity(0.10, ACCENT)
+FONT = "Nunito"
 MONO = "monospace"
-CONTROL_HEIGHT = 34
-CONTROL_PADDING = ft.Padding(12, 8, 12, 8)
-CONTROL_RADIUS = 8
-GAP = 12
+CONTROL_HEIGHT = 36
+CONTROL_PADDING = ft.Padding(14, 8, 14, 8)
+CONTROL_RADIUS = 12
+GAP = 14
 SIDEBAR_WIDTH = 254
 SESSION_WIDTH = 360
 
 
+def tint(alpha: float, color: str = TEXT) -> str:
+    """A see-through layer of `color`: hovers and hairlines on the light surfaces."""
+    return ft.Colors.with_opacity(alpha, color)
+
+
 def app_theme() -> ft.Theme:
     return ft.Theme(
-        color_scheme_seed=BLUE,
-        color_scheme=ft.ColorScheme(primary=BLUE, secondary=BLUE, surface=PANEL, on_surface=TEXT,
-                                    error=RED, outline=BORDER, surface_container_highest=FIELD),
+        color_scheme_seed=ACCENT,
+        font_family=FONT,
+        color_scheme=ft.ColorScheme(primary=ACCENT, on_primary=INK, secondary=INFO, surface=PANEL,
+                                    on_surface=TEXT, error=RED, outline=BORDER,
+                                    surface_container_highest=FIELD),
         divider_color=DIVIDER,
         card_theme=ft.CardTheme(margin=0),
-        scrollbar_theme=ft.ScrollbarTheme(thickness=6, radius=3,
-                                          thumb_color=ft.Colors.with_opacity(0.2, "#FFFFFF")),
-        tooltip_theme=ft.TooltipTheme(decoration=ft.BoxDecoration(bgcolor=HOVER, border_radius=8),
-                                      text_style=ft.TextStyle(color=TEXT, size=12)),
+        scrollbar_theme=ft.ScrollbarTheme(thickness=6, radius=3, thumb_color=tint(0.18)),
+        tooltip_theme=ft.TooltipTheme(decoration=ft.BoxDecoration(bgcolor=TEXT, border_radius=10),
+                                      text_style=ft.TextStyle(color=INK, size=12)),
     )
 
 
@@ -50,25 +63,23 @@ def text(value: str, size: float = 13, color: str = TEXT, weight=None, **kwargs)
 
 
 def backdrop(content: ft.Control) -> ft.Container:
-    """The window behind the glass: a dim checkerboard."""
-    return ft.Container(content, expand=True, bgcolor=BG, padding=GAP,
-                        image=ft.DecorationImage(src="grid.png", repeat=ft.ImageRepeat.REPEAT, scale=2,
-                                                 alignment=ft.Alignment.TOP_LEFT))
+    """The window behind the panels: a soft wash with a large, faint Poke Ball in the corner."""
+    return ft.Container(ft.Stack([
+        ft.Container(ft.Image(src="pokeball.svg", width=720, height=720, opacity=0.05),
+                     right=-180, bottom=-220),
+        ft.Container(content, left=0, top=0, right=0, bottom=0, padding=GAP),
+    ], expand=True), expand=True, bgcolor=BG,
+        gradient=ft.LinearGradient(begin=ft.Alignment.TOP_LEFT, end=ft.Alignment.BOTTOM_RIGHT,
+                                   colors=["#F4F7FB", BG, "#E6ECF4"]))
 
 
-def glass(content: ft.Control, radius: float = 20, **kwargs) -> ft.Container:
-    """Liquid Glass: the layer of navigation and controls that floats above the content, never the content itself."""
-    # One colour on all four sides: Flutter leaves the corners of a mixed-colour border square.
-    return ft.Container(
-        content, blur=ft.Blur(30, 30), border_radius=radius, clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
-        gradient=ft.LinearGradient(begin=ft.Alignment.TOP_CENTER, end=ft.Alignment.BOTTOM_CENTER,
-                                   colors=[ft.Colors.with_opacity(0.72, "#26262A"),
-                                           ft.Colors.with_opacity(0.64, "#18181B")]),
-        border=ft.Border.all(1, ft.Colors.with_opacity(0.1, "#FFFFFF")),
-        **kwargs)
+def glass(content: ft.Control, radius: float = 24, **kwargs) -> ft.Container:
+    """A floating white panel: navigation, tools and the session sit on these."""
+    return ft.Container(content, bgcolor=PANEL, border_radius=radius, clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+                        border=ft.Border.all(1, OUTLINE), shadow=SHADOW, **kwargs)
 
 
-def surface(content: ft.Control, *, bgcolor: str = CARD, radius: float = 14, **kwargs) -> ft.Container:
+def surface(content: ft.Control, *, bgcolor: str = CARD, radius: float = 18, **kwargs) -> ft.Container:
     """A solid surface in the content layer."""
     return ft.Container(content, bgcolor=bgcolor, border_radius=radius, **kwargs)
 
@@ -87,7 +98,7 @@ def notch(*controls: ft.Control) -> ft.Row:
     items: list[ft.Control] = []
     for control in controls:
         if items:
-            items.append(ft.Container(width=1, height=18, bgcolor=ft.Colors.with_opacity(0.12, "#FFFFFF")))
+            items.append(ft.Container(width=1, height=18, bgcolor=tint(0.10)))
         items.append(control)
     row = ft.Row(items, spacing=8, tight=True, vertical_alignment=ft.CrossAxisAlignment.CENTER)
     return ft.Row([glass(ft.Container(row, padding=TOOLBAR_INSET), radius=TOOLBAR_ITEM / 2 + TOOLBAR_INSET)],
@@ -96,14 +107,14 @@ def notch(*controls: ft.Control) -> ft.Row:
 
 def panel_header(title: str, *actions: ft.Control) -> ft.Container:
     return ft.Container(
-        ft.Row([text(title, 15, weight=ft.FontWeight.W_600), ft.Row(list(actions), spacing=2)],
+        ft.Row([text(title, 17, weight=ft.FontWeight.W_800), ft.Row(list(actions), spacing=2)],
                alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
         padding=ft.Padding(18, 14, 12, 6), height=52)
 
 
 def section(title: str, body: ft.Control | None = None, trailing: ft.Control | None = None) -> ft.Column:
     """A titled group inside a glass panel: the spacing separates it, no box."""
-    head: list[ft.Control] = [text(title, 12, MUTED, weight=ft.FontWeight.W_600, expand=True)]
+    head: list[ft.Control] = [text(title, 12, MUTED, weight=ft.FontWeight.W_700, expand=True)]
     if trailing:
         head.append(trailing)
     return ft.Column([ft.Row(head, spacing=8), *([body] if body else [])], spacing=8, tight=True)
@@ -128,7 +139,7 @@ def grid(tiles: list[ft.Control], columns: int = 2, spacing: float = 6) -> ft.Co
 
 def card(title: str, body: ft.Control | None = None, description: str = "",
          trailing: ft.Control | None = None, tip: str = "") -> ft.Container:
-    head = [text(title, 13, weight=ft.FontWeight.W_600, expand=True)]
+    head = [text(title, 14, weight=ft.FontWeight.W_800, expand=True)]
     if tip:
         head.append(pixel_icon("circle-info", color=FAINT, tooltip=tip))
     if trailing:
@@ -138,20 +149,19 @@ def card(title: str, body: ft.Control | None = None, description: str = "",
         rows.append(text(description, 12, MUTED))
     if body:
         rows.append(body)
-    return surface(ft.Container(ft.Column(rows, spacing=10, tight=True), padding=16))
+    return surface(ft.Container(ft.Column(rows, spacing=10, tight=True), padding=18))
 
 
 def dialog(**kwargs) -> ft.AlertDialog:
     return ft.AlertDialog(bgcolor=PANEL, elevation=24,
-                          shape=ft.RoundedRectangleBorder(
-                              radius=20, side=ft.BorderSide(1, ft.Colors.with_opacity(0.08, "#FFFFFF"))),
-                          barrier_color=ft.Colors.with_opacity(0.6, "#000000"), **kwargs)
+                          shape=ft.RoundedRectangleBorder(radius=26, side=ft.BorderSide(1, OUTLINE)),
+                          barrier_color=ft.Colors.with_opacity(0.35, "#101828"), **kwargs)
 
 
 def _border() -> dict:
     flat = ft.OutlineInputBorder(border_radius=CONTROL_RADIUS, side=ft.BorderSide(1, ft.Colors.TRANSPARENT))
     return {ft.ControlState.FOCUSED: ft.OutlineInputBorder(border_radius=CONTROL_RADIUS,
-                                                           side=ft.BorderSide(1.5, BLUE)),
+                                                           side=ft.BorderSide(1.5, ACCENT)),
             ft.ControlState.DISABLED: flat, ft.ControlState.DEFAULT: flat}
 
 
@@ -183,7 +193,7 @@ def field(label: str = "", value: str = "", hint: str = "", mono: bool = False, 
     return control(value=value, label=label or None, hint_text=hint or None, text_style=style,
                    label_style=ft.TextStyle(size=12, color=MUTED), dense=True,
                    hint_style=ft.TextStyle(size=13, color=FAINT), bgcolor=FIELD, filled=True,
-                   border=_border(), cursor_color=BLUE,
+                   border=_border(), cursor_color=ACCENT,
                    text_vertical_align=ft.VerticalAlignment.CENTER, **kwargs)
 
 
@@ -192,8 +202,8 @@ def dropdown(options: list[tuple[str, str]], value: str | None, on_select=None, 
                        on_select=on_select, dense=True, filled=True, bgcolor=FIELD, border=_border(),
                        text_size=13, expand=True, height=CONTROL_HEIGHT, content_padding=CONTROL_PADDING,
                        trailing_icon=pixel_icon("chevron-down", color=MUTED),
-                       selected_trailing_icon=pixel_icon("chevron-up", color=BLUE),
-                       menu_style=ft.MenuStyle(bgcolor=PANEL, shape=ft.RoundedRectangleBorder(radius=10)),
+                       selected_trailing_icon=pixel_icon("chevron-up", color=ACCENT),
+                       menu_style=ft.MenuStyle(bgcolor=PANEL, shape=ft.RoundedRectangleBorder(radius=14)),
                        **kwargs)
 
 
@@ -206,26 +216,26 @@ def labeled_control(label: str, control: ft.Control, **kwargs) -> ft.Column:
 class _Button(ft.Button):
     def before_update(self):
         super().before_update()
-        if isinstance(self.icon, ft.Image):   # a pixel icon is an image: it takes the label's colour by hand
+        if isinstance(self.icon, (ft.Image, ft.Icon)):   # the icon takes the label's colour by hand
             colors = self.style.color
             self.icon.color = colors[ft.ControlState.DISABLED if self.disabled else ft.ControlState.DEFAULT]
 
 
-def button(label: str, on_click=None, icon=None, color: str = BLUE, filled: bool = True,
+def button(label: str, on_click=None, icon=None, color: str = ACCENT, filled: bool = True,
            **kwargs) -> ft.Button:
     """A capsule. Filled carries the colour and is the one likely action in a view; the rest are not filled."""
-    ink = BG if filled else TEXT
+    ink = INK if filled else TEXT
     style = ft.ButtonStyle(
-        bgcolor={ft.ControlState.DISABLED: ft.Colors.with_opacity(0.05, "#FFFFFF"),
-                 ft.ControlState.DEFAULT: color if filled else ft.Colors.with_opacity(0.09, "#FFFFFF")},
+        bgcolor={ft.ControlState.DISABLED: tint(0.06),
+                 ft.ControlState.DEFAULT: color if filled else tint(0.06)},
         color={ft.ControlState.DISABLED: FAINT, ft.ControlState.DEFAULT: ink},
-        shape=ft.StadiumBorder(), padding=ft.Padding(16, 8, 16, 8),
-        side={ft.ControlState.FOCUSED: ft.BorderSide(2, ft.Colors.with_opacity(0.6, BLUE)),
+        shape=ft.StadiumBorder(), padding=ft.Padding(18, 8, 18, 8),
+        side={ft.ControlState.FOCUSED: ft.BorderSide(2, ft.Colors.with_opacity(0.5, ACCENT)),
               ft.ControlState.DEFAULT: ft.BorderSide(0, ft.Colors.TRANSPARENT)},
-        text_style=ft.TextStyle(size=13, weight=ft.FontWeight.W_500),
+        text_style=ft.TextStyle(size=13, weight=ft.FontWeight.W_800, font_family=FONT),
         overlay_color={ft.ControlState.DEFAULT: ft.Colors.TRANSPARENT,
-                       ft.ControlState.HOVERED: ft.Colors.with_opacity(0.08, "#FFFFFF"),
-                       ft.ControlState.PRESSED: ft.Colors.with_opacity(0.14, "#000000")},
+                       ft.ControlState.HOVERED: ft.Colors.with_opacity(0.10, "#FFFFFF" if filled else TEXT),
+                       ft.ControlState.PRESSED: ft.Colors.with_opacity(0.12, "#000000")},
         elevation=0, shadow_color=ft.Colors.TRANSPARENT)
     kwargs.setdefault("height", CONTROL_HEIGHT)
     return _Button(label, icon=pixel_icon(icon, color=ink) if icon else None, on_click=on_click,
@@ -238,28 +248,28 @@ def secondary_button(label: str, on_click=None, icon=None, **kwargs) -> ft.Butto
 
 def link_button(label: str, on_click=None) -> ft.TextButton:
     return ft.TextButton(label, on_click=on_click, height=CONTROL_HEIGHT,
-                         style=ft.ButtonStyle(color=BLUE, padding=ft.Padding(10, 6, 10, 6),
+                         style=ft.ButtonStyle(color=ACCENT, padding=ft.Padding(10, 6, 10, 6),
                                               shape=ft.StadiumBorder(),
-                                              overlay_color=ft.Colors.with_opacity(0.08, BLUE)))
+                                              text_style=ft.TextStyle(weight=ft.FontWeight.W_700, font_family=FONT),
+                                              overlay_color=ft.Colors.with_opacity(0.08, ACCENT)))
 
 
 def icon_button(icon, on_click=None, tooltip: str = "", color: str = MUTED, **kwargs) -> ft.IconButton:
     return ft.IconButton(pixel_icon(icon, color=color), tooltip=tooltip or None,
-                         on_click=on_click, width=32, height=32,
-                         style=ft.ButtonStyle(shape=ft.CircleBorder(),
-                                              overlay_color=ft.Colors.with_opacity(0.08, "#FFFFFF")),
+                         on_click=on_click, width=34, height=34,
+                         style=ft.ButtonStyle(shape=ft.CircleBorder(), overlay_color=tint(0.06)),
                          **kwargs)
 
 
 def switch(value: bool, on_change) -> ft.Switch:
     return ft.Switch(value=value, height=CONTROL_HEIGHT, padding=0,
-                     active_color="#FFFFFF", active_track_color=BLUE,
-                     inactive_thumb_color="#FFFFFF", inactive_track_color="#3A3A3C",
+                     active_color="#FFFFFF", active_track_color=ACCENT,
+                     inactive_thumb_color="#FFFFFF", inactive_track_color="#CBD2DD",
                      track_outline_color={ft.ControlState.DEFAULT: ft.Colors.TRANSPARENT},
                      overlay_color={ft.ControlState.DEFAULT: ft.Colors.TRANSPARENT,
                                     ft.ControlState.HOVERED: ft.Colors.TRANSPARENT,
                                     ft.ControlState.PRESSED: ft.Colors.TRANSPARENT,
-                                    ft.ControlState.FOCUSED: ft.Colors.with_opacity(0.18, BLUE)},
+                                    ft.ControlState.FOCUSED: ft.Colors.with_opacity(0.18, ACCENT)},
                      splash_radius=16,
                      on_change=on_change)
 
@@ -279,10 +289,10 @@ def segmented(options: list[tuple[str, str, str]], value: str, on_change, wrap: 
     def render(selected):
         row.controls = [
             ft.Container(ft.Row([
-                pixel_icon(icon, color=BLUE if key == selected else FAINT),
-                text(label, 12, TEXT if key == selected else MUTED, weight=ft.FontWeight.W_600),
+                pixel_icon(icon, color=ACCENT if key == selected else FAINT),
+                text(label, 12, TEXT if key == selected else MUTED, weight=ft.FontWeight.W_800),
             ], spacing=6, tight=True), border_radius=TOOLBAR_ITEM / 2, **size,
-                bgcolor=ft.Colors.with_opacity(0.14, "#FFFFFF") if key == selected else None,
+                bgcolor=SELECTED if key == selected else None,
                 on_click=lambda e, k=key: pick(k))
             for key, label, icon in options]
 
