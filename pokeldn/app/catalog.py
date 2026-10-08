@@ -159,9 +159,16 @@ FRLG_TRAINER = Tool("frlg-trainer", "Read my trainer", "bin/frlg_trade_host.py",
                     ("Start, then wait for 'Hosting Direct Corner' in the log.",
                      f"{FRLG_PATH}, Join Group, then pick POKELDN.",
                      "Your trainer card appears here as soon as the console joins.",
+                     "Walk to your seat at the trade table and press A. Leaving by the door instead leaves the "
+                     "console on 'Please wait'.",
                      "On the trade menu, choose Cancel and Yes: nothing is traded."),
-                    (Field("--channel", "Channel", "choice", default="11", choices=CHANNELS, help=CHANNEL_HELP,
-                           hidden=True),),
+                    # The same link identity as Trade (Host), whose console joins on retail.
+                    (Field("--version", "Version", "choice", default="firered", choices=VERSIONS, hidden=True,
+                           help="The game pokeldn's own trainer reports on the link."),
+                     Field("--language", "Trainer language", "choice", default="english", choices=LANGUAGES,
+                           hidden=True, help="The language pokeldn's own trainer reports on the link."),
+                     Field("--channel", "Channel", "choice", default="11", choices=CHANNELS, help=CHANNEL_HELP,
+                           hidden=True)),
                     fixed=("--live", "--phy", "auto", "--identify", "--slot", "0", "--ot", "{ot}",
                            "--id", "{tid}:{sid}", "--out", "{received}/frlg-identify-{stamp}.pk3"),
                     doc="frlg_link.md")

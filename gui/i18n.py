@@ -188,6 +188,10 @@ ES = {
         "Centro Pokémon, 2.º piso, tercer encargado, Direct Corner, Trade Center, Join Group y elige POKELDN.",
     "Your trainer card appears here as soon as the console joins.":
         "Tu tarjeta de entrenador aparece aquí en cuanto la consola se une.",
+    "Walk to your seat at the trade table and press A. Leaving by the door instead leaves the console on "
+    "'Please wait'.":
+        "Camina hasta tu asiento en la mesa de intercambio y presiona A. Si sales por la puerta, la consola se "
+        "queda en 'Please wait'.",
     "On the trade menu, choose Cancel and Yes: nothing is traded.":
         "En el menú de intercambio elige Cancelar y Sí: no se intercambia nada.",
     "Host a Direct Corner trade. The console joins pokeldn's group.":
@@ -327,6 +331,41 @@ ES = {
     "GitHub": "GitHub",
     "Discord": "Discord",
     "parts": "partes",
+
+    # the game-style menu (gui/views/menu.py, screen.py, main.py)
+    "TRADE": "INTERCAMBIAR",
+    "Send or receive Pokemon": "Manda o recibe Pokémon",
+    "MYSTERY GIFT": "REGALO MISTERIOSO",
+    "Eggs, items and events": "Huevos, objetos y eventos",
+    "POKEMON": "POKÉMON",
+    "Build Pokemon for your save": "Genera Pokémon de tu partida",
+    "MY TRAINER": "MI ENTRENADOR",
+    "Read your TID and SID": "Lee tu TID y SID",
+    "MY SAVE": "MI PARTIDA",
+    "Back up and restore": "Respaldar y restaurar",
+    "OPTIONS": "OPCIONES",
+    "Board, language and keys": "Placa, idioma y claves",
+    "Board ready on {port}": "Placa lista en {port}",
+    "TRAINER ID": "ID ENTRENADOR",
+    "SECRET ID": "ID SECRETO",
+    "SHINY VALUE": "VALOR SHINY",
+    "Trainer": "Entrenador",
+    "Your trainer is not read yet": "Todavía no leíste tu entrenador",
+    "Read your name, Trainer ID and Secret ID from the console.":
+        "Lee tu nombre, tu ID de entrenador y tu ID secreto desde la consola.",
+    "Read now": "Leer ahora",
+    "READY TO TRADE": "LISTOS PARA INTERCAMBIAR",
+    "Back": "Volver",
+    "Back to the menu (Esc)": "Volver al menú (Esc)",
+    "Guide": "Guía",
+    "Move": "Mover",
+    "Choose": "Elegir",
+    "Build the Pokemon you will trade: they belong to your trainer.":
+        "Genera los Pokémon que vas a intercambiar: son de tu entrenador.",
+    "Copy your whole save to this computer, or put one back.":
+        "Copia tu partida completa a esta computadora, o pon una de vuelta.",
+    "Board, language, keys and the guide.": "Placa, idioma, claves y la guía.",
+    "Trade them now": "Intercambiarlos ahora",
 
     # the owner of built Pokemon
     "Built for your trainer: {name} · ID {tid}": "Se genera para tu entrenador: {name} · ID {tid}",

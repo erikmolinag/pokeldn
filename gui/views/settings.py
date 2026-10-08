@@ -121,10 +121,7 @@ class SettingsView:
                       "works without them."),
                    trailing=t.switch(s.sprites, lambda e: self.save("sprites", e.control.value))),
         ]
-        self.column.controls = [
-            ft.Container(ft.Row([t.pixel_icon("gear", size=24, color=t.ACCENT),
-                                 t.text(tr("Settings"), 26, weight=ft.FontWeight.W_900)], spacing=10),
-                         padding=ft.Padding(4, 12, 0, 0)),
+        self.column.controls = [   # the Options screen's header names the page
             section("The app"),
             t.card(tr("Language of the app"), ft.Row([ft.Container(language, width=260)]),
                    tr("The language of every screen. Pokemon, moves and items keep your game's names.")),

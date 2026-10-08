@@ -171,8 +171,8 @@ PLACEHOLDER_TRAINER = {"ot": "POKELDN", "tid": 2470, "sid": 46848, "language": 2
 def identify_placeholder():
     """A legal level-3 Pidgey for --identify's party: the console must see one Pokemon to open the
     trade menu, where the player only Cancels."""
-    made = pokemon_service.SERVICE.make("frlg", PLACEHOLDER_SPECIES, PLACEHOLDER_TRAINER, level=3,
-                                        version="firered")
+    # PKHeX takes its GameVersion name (gui/views/pokemon.py VERSIONS): FR, not firered.
+    made = pokemon_service.SERVICE.make("frlg", PLACEHOLDER_SPECIES, PLACEHOLDER_TRAINER, level=3, version="FR")
     return made["file"]
 
 

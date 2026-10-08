@@ -86,3 +86,18 @@ class HomeView:
             t.pixel_icon("chevron-right", size=24, color=t.FAINT),
         ], spacing=14), padding=14, border_radius=20, bgcolor=t.CARD, border=ft.Border.all(1, t.OUTLINE),
             on_click=on_click, ink=True)
+
+
+def team_side(app) -> ft.Control:
+    """The team screen's side: whose Pokemon these are, and the way to trade them."""
+    return t.glass(ft.Container(ft.Column([
+        t.text(tr("Your trainer card"), 18, weight=ft.FontWeight.W_900),
+        trainer_card(app, compact=True),
+        t.text(tr("Every Pokemon you build here carries this trainer as its original trainer: the game treats it "
+                  "as caught in your own save, so it obeys at any level and shows your name."), 14, t.SOFT),
+        t.text(tr("Shiny Pokemon are built for your Trainer ID and Secret ID, so they are shiny in your game."),
+               14, t.SOFT),
+        ft.Container(expand=True),
+        ft.Row([t.button(tr("Trade them now"), lambda e: app.navigate("trade"), "arrows-horizontal",
+                         expand=True)]),
+    ], spacing=16, expand=True), padding=24), width=380)

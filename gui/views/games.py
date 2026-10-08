@@ -40,11 +40,18 @@ def tool_role(tool: Tool) -> str:
 
 
 class GamesView:
-    def __init__(self, app):
+    """One FireRed/LeafGreen tool, its cards and its session. poke-app opens each menu entry as a full screen:
+    `single` pins the tool (no tool list); `only_offer` shows just the Pokemon to offer (the team screen,
+    no session); `tools` lets a screen switch between a few tools (Trade: host or join)."""
+
+    def __init__(self, app, single: str = "", only_offer: bool = False, tools: tuple[str, ...] = ()):
         self.app = app
         self.game: Game = GAMES[0]
+        self.single, self.only_offer = single, only_offer
+        self.choices = [x for x in self.game.tools if x.key in tools]
         # The first tool reads the player's trainer; once it is known, start on trading.
-        self.tool: Tool = self.game.tools[1 if app.settings.my_trainer else 0]
+        self.tool: Tool = next((x for x in self.game.tools if x.key == single), None) or \
+            self.game.tools[1 if app.settings.my_trainer else 0]
         self.tab = "basic"
         self.search = ""
         self.sprites: dict[str, Sprite] = {}   # a species field's key -> the sprite on its card
@@ -58,20 +65,33 @@ class GamesView:
                                 spacing=t.GAP, padding=ft.Padding(0, 62, 0, 24), expand=True)
         self.tabs = ft.Container()
         self.session = SessionPanel(app, self)
+        self.switcher = ft.Container()   # Trade: who looks for whom
         center = ft.Stack([
             t.fade(self.body, 48),
-            ft.Container(t.notch(self.tabs,
+            ft.Container(t.notch(*([self.switcher] if self.choices else []), self.tabs,
                                  t.icon_button("book-open", self._open_doc, tr("Read the docs for this game"))),
                          top=0, left=0, right=0),
         ], expand=True)
-        self.control = ft.Row([
-            t.panel(ft.Column([t.panel_header(tr("FireRed & LeafGreen")), t.fade(self.tree)], spacing=0, expand=True),
-                    width=t.SIDEBAR_WIDTH),
-            center,
-            self.session.control,
-        ], spacing=t.GAP, expand=True, vertical_alignment=ft.CrossAxisAlignment.STRETCH)
+        if only_offer:
+            self.control = center
+        elif single:
+            self.control = ft.Row([center, self.session.control], spacing=t.GAP, expand=True,
+                                  vertical_alignment=ft.CrossAxisAlignment.STRETCH)
+        else:
+            self.control = ft.Row([
+                t.panel(ft.Column([t.panel_header(tr("FireRed & LeafGreen")), t.fade(self.tree)], spacing=0,
+                                  expand=True), width=t.SIDEBAR_WIDTH),
+                center,
+                self.session.control,
+            ], spacing=t.GAP, expand=True, vertical_alignment=ft.CrossAxisAlignment.STRETCH)
         self.select(self.game, self.tool, update=False)
         app.trainer_listeners.append(self._trainer_changed)
+
+    def render_switcher(self) -> None:
+        if self.choices:
+            self.switcher.content = t.segmented(
+                [(x.key, tr(x.name), tool_icon(x)) for x in self.choices], self.tool.key,
+                lambda key: self.select(self.game, next(x for x in self.choices if x.key == key)))
 
     def _trainer_changed(self) -> None:
         """A new trainer: the offer cards say whom they build for, the trainer tool shows the card."""
@@ -79,13 +99,29 @@ class GamesView:
             self.render_body()
             self.cards.update()
 
-    def enter(self, tool: str = "", **_) -> None:
+    def enter(self, tool: str = "", gift_mode: str = "", **_) -> None:
         self.visible = True
         picked = next((x for x in self.game.tools if x.key == tool), None)
-        if picked is not None and picked is not self.tool:
+        if picked is not None and picked is not self.tool and not self.single:
             self.select(self.game, picked, update=False)
+        if gift_mode:
+            self.set_gift_mode(gift_mode)
+        self.render_body()      # another screen may have changed the shared offer or gift
         self.session.refresh(update=False)
         self.app.check_if_unknown()
+
+    def set_gift_mode(self, mode: str) -> None:
+        """Mi partida opens the gift tool on its save tab; Mystery Gift never starts there."""
+        from pokeldn.app import gift_builder
+        field = next((f for f in self.tool.fields if f.kind == "builder"), None)
+        if field is None:
+            return
+        value = gift_builder.normalized(gift_builder.GAMES[self.tool.key], command.value_of(field, self.values))
+        wanted = "save" if mode == "save" else ("preset" if value["mode"] == "save" else value["mode"])
+        if value["mode"] != wanted:
+            value["mode"] = wanted
+            self.values[field.key] = value
+            self.app.settings.save()
 
     def leave(self) -> None:
         self.visible = False
@@ -117,9 +153,11 @@ class GamesView:
         if tool is not self.tool:
             self.tab, self.search = "basic", ""
         self.game, self.tool = game, tool
-        self.summary.value = tr(tool.summary)
+        self.summary.value = "" if self.only_offer else tr(tool.summary)
         self.tabs.content = t.segmented([("basic", tr("Basic"), "sliders-horizontal"),
                                           ("all", tr("Advanced"), "bulletlist")], self.tab, self._tab)
+        self.tabs.visible = not self.only_offer
+        self.render_switcher()
         self.render_tree()
         self.render_body()
         self.session.show(tool)
@@ -152,7 +190,7 @@ class GamesView:
             self.tabs.visible = False
             self.cards.controls = [t.card(tr("Not available yet"), None, self.tool.unavailable)]
             return
-        self.tabs.visible = True
+        self.tabs.visible = not self.only_offer
         self.cards.controls = self.basic_cards() if self.tab == "basic" else self.all_rows()
 
     def _tab(self, key: str) -> None:
@@ -176,6 +214,8 @@ class GamesView:
         cards, groups = [], {}
         for field in self.tool.fields:
             if field.hidden or not command.applies(field, self.tool, self.values):
+                continue
+            if self.only_offer and field.kind != "pokemon":
                 continue
             if field.group:
                 if field.group not in groups:
@@ -708,6 +748,7 @@ class SessionPanel:
         for folder in (SESSION / "captures", os.path.expanduser(s.received)):
             os.makedirs(folder, exist_ok=True)
         trace = f"captures/{tool.key}-{stamp}_esp32.trace" if s.board_trace else None
+        self.open_log_file(tool, stamp, args)
         self.log.add(f"[app] {tool.name} · {self.games.game.name} · radio {port}")
         self.seen, self.received.content, self.received.visible = {}, None, False
         self.transfer.content, self.transfer.visible = None, False
@@ -721,8 +762,36 @@ class SessionPanel:
         threading.Thread(target=self._tick, daemon=True).start()
         self.refresh()
 
+    log_file = None
+
+    def open_log_file(self, tool: Tool, stamp: str, args: list[str]) -> None:
+        """poke-app: every session's output also goes to session/logs, so a failure can be read afterwards."""
+        self.close_log_file()
+        try:
+            folder = SESSION / "logs"
+            folder.mkdir(parents=True, exist_ok=True)
+            self.log_file = open(folder / f"{tool.key}-{stamp}.log", "a", encoding="utf-8", buffering=1)
+            self.log_file.write(shlex.join([tool.script, *args]) + "\n")
+        except OSError:
+            self.log_file = None
+
+    def close_log_file(self, last: str = "") -> None:
+        if self.log_file is not None:
+            try:
+                if last:
+                    self.log_file.write(last + "\n")
+                self.log_file.close()
+            except OSError:
+                pass
+            self.log_file = None
+
     def _line(self, line: str) -> None:
         self.log.add(line)
+        if self.log_file is not None:
+            try:
+                self.log_file.write(line + "\n")
+            except (OSError, ValueError):
+                pass
         if found := received.trainer_found(line):
             self.app.ui(lambda: self.show_trainer(found))
         if progress := received.save_progress(line):
@@ -753,6 +822,8 @@ class SessionPanel:
         self.app.process.stop()
 
     def _exited(self, code: int) -> None:
+        self.close_log_file(f"[app] Exited with code {code}.")
+
         def done():
             if self.stopping:
                 self.set_status("Stopped", t.MUTED)

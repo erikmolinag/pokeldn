@@ -52,6 +52,7 @@ MATERIAL = {
     "trainer": ft.Icons.BADGE_ROUNDED,
     "pokeball": ft.Icons.CATCHING_POKEMON,
     "language": ft.Icons.TRANSLATE_ROUNDED,
+    "unfold": ft.Icons.UNFOLD_MORE_ROUNDED,
     "male": ft.Icons.MALE_ROUNDED,
     "female": ft.Icons.FEMALE_ROUNDED,
 }

@@ -92,3 +92,18 @@ def test_tr_falls_back_to_english_and_formats():
     i18n.set_language("en")
     assert i18n.tr("{n} traded", n=3) == "3 traded"
     i18n.set_language("es")
+
+
+def test_the_identify_placeholder_builds_through_pkhex():
+    """--identify's Pidgey goes through the real helper: a version PKHeX cannot parse failed on retail."""
+    from pokeldn import pokemon
+    try:
+        pokemon._command()
+    except Exception:
+        pytest.skip("PKHeX helper not built")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("frlg_trade_host", os.path.join(ROOT, "bin", "frlg_trade_host.py"))
+    host = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(host)
+    info = pokemon.SERVICE.check("frlg", host.identify_placeholder())
+    assert info["legal"] and info["species_id"] == host.PLACEHOLDER_SPECIES
