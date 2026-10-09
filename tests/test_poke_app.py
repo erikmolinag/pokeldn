@@ -113,6 +113,7 @@ def test_the_identify_placeholder_builds_through_pkhex():
 
 def test_the_menu_arrows_reach_every_tile_and_lead_back():
     """HOME's tile grid: from any tile the arrows reach every other one, and every move has a way back."""
+    pytest.importorskip("flet")
     from gui.views.menu import ENTRIES, MOVES
     back = {"Arrow Up": "Arrow Down", "Arrow Down": "Arrow Up", "Arrow Left": "Arrow Right",
             "Arrow Right": "Arrow Left"}
@@ -131,6 +132,7 @@ def test_the_menu_arrows_reach_every_tile_and_lead_back():
 
 
 def test_the_app_links_only_to_the_fork():
+    pytest.importorskip("flet")
     from gui.views import docs, settings as settings_view
     urls = [url for _, url in settings_view.LINKS] + [docs.REPO, docs.SITE]
     assert all(url.startswith("https://github.com/erikmolinag/pokeldn") for url in urls)
