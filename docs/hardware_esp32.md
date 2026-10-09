@@ -163,13 +163,14 @@ beacons cannot be stopped.
 ## Serial protocol
 
 A frame is `COBS(type | payload | crc32-le(type | payload))` then `0x00`; the CRC is CRC-32/ISO-HDLC
-(`zlib.crc32`). The classic ESP32 boots at 115200 baud; `BAUD` switches both ends. On S3,
+(`zlib.crc32`). The classic ESP32 boots at 115200 baud; `BAUD` switches both ends, and the board keeps
+the rate until it resets. On S3,
 `BAUD` is acknowledged without changing the USB transfer rate. Anything before a `0x00`,
 the ROM's boot text included, fails the checksum and is discarded.
 
 | type | direction | payload |
 |---|---|---|
-| `0x01` HELLO | host | none; answered by CREDIT 0, then INFO |
+| `0x01` HELLO | host | none; answered by CREDIT 0, then INFO. The host sends a `0x00` before it, which ends a partial frame a HELLO at the wrong rate left in the board's decoder; the firmware skips the empty frame |
 | `0x02` BAUD | host | u32 baud; RESULT at the old rate, then the switch, which waits up to 3 s for the UART to drain (at 115200 the ring holds over a second of RX_MGMT). The first HELLO at 1500000 is sometimes lost (about one open of four measured); `open_serial` retries it |
 | `0x03` CHANNEL | host | u8 channel; idle only |
 | `0x04` STA_JOIN | host | u8 channel, 6 BSSID, 32 SSID (the LDN SSID's hex text), 16 key, 6 station MAC (zero = random); optional: u8 fixed data rate (the AP_START bits 3..5 table), u8 maximum TX power in 0.25 dBm (`esp_wifi_set_max_tx_power`, 8 to 84, the driver caps it at 61), u8 flags: 1 RTS before every frame, 2 no RTS before a retry (`esp_wifi_internal_set_rts`) |
@@ -587,12 +588,23 @@ last core draws a frame every 50 ms and sends it at 400 kHz (1031 bytes, about 2
 | ESP32 | GPIO21 | GPIO22 | DevKit V1 D21, D22 |
 | ESP32-S3 | GPIO8 | GPIO9 | |
 | ESP32-C3 | GPIO6 | GPIO7 | XIAO D4, D5 |
+| ESP32-C3 | GPIO5 | GPIO6 | the 0.42-inch OLED board's own 72x40 screen, probed second |
 | ESP32-C6 | GPIO22 | GPIO23 | XIAO D4, D5 |
 
 VCC goes to 3V3 and GND to GND. The common four-pin module (GND, VCC, SCL, SDA) carries its own
 3.3 V regulator and 4.7 k pull-ups on SCL and SDA; its address resistor selects 0x3C (silkscreen
 0x78) or 0x3D (0x7A). Its panel maps segment 127 to column 1 and COM0 to row 63, so the firmware sets
 segment remap (`A1`), reversed COM scan (`C8`) and alternative COM pins (`DA 12`).
+
+The ESP32-C3 0.42-inch OLED board (sold as ABRobot and under other names) carries a 72x40 panel on
+GPIO5 and GPIO6, and an LED on GPIO8 that the firmware leaves alone. Driven with the 128x64 INIT, the
+panel shows columns 30..101 and rows 24..63 of the frame, the last 40 rows of the reversed scan.
+The columns are the vendor example's x offset 30. The rows were read off a photo of the idle scene
+drawn at row 12: the first visible row was the bottom row of the "pokeldn" glyphs, frame row 23 with
+the scene's one-pixel drift either way. The vendor example's y offset 12 is a u8g2 text baseline.
+A screen found on these pins gets compact scenes drawn into that window: one line of at most 12
+characters over the picture, and sprites at half size, a pixel lit when two of its 2x2 block are.
+`tools/ldn/screen_preview.py --panel 72x40` renders them.
 
 Without host commands the screen shows the radio's state: idle, joining or hosting (rings around a
 Poke Ball), and linked, where a cable between a console and a Poke Ball carries one digit per frame
@@ -730,8 +742,12 @@ counted; a FireRed host and a Legends Z-A host trade followed with no error on t
 only USB serial port present (`/dev/cu.usbserial-*`, `/dev/cu.SLAB_USBtoUART*`,
 `/dev/cu.wchusbserial*`, `/dev/cu.usbmodem*`, `/dev/ttyUSB*`, `/dev/ttyACM*`; USB COM ports on Windows)
 and refuses to choose between several, since opening a port can reset its board. The port is opened once
-per process with DTR and RTS released; a CP2102 board on macOS resets on open regardless, so the host
-retries HELLO for 5 s before switching to 921600. Windows opens a COM port exclusively: a second open
+per process with DTR and RTS released; a CP2102 board on macOS resets on open regardless. A classic
+board that does not reset keeps the previous process's `BAUD`, so the host sends HELLO at 115200,
+`POKELDN_ESP32_BAUD` and each rate the app offers (921600, 1500000) in turn, five passes of 0.5 s
+each, then switches to the requested rate; the app's board check leaves the rate where it found it.
+A HELLO speaking 115200 alone to a board left at 921600 ends in `no reply 0x81 to command 0x01`.
+Windows opens a COM port exclusively: a second open
 while any handle is held, in this process or another, fails with `PermissionError(13, 'Access is
 denied.')`, so a board that never answers HELLO closes its port before the launcher retries. A USB
 device removed under an open port fails the next read the same way (`GetOverlappedResult failed` or `ClearCommError failed`)

@@ -1,5 +1,6 @@
 import os
 import random
+import re
 import time
 from functools import cache
 
@@ -7,6 +8,7 @@ from pokeldn.app import gift_builder
 from pokeldn.app.catalog import Field, Tool
 from pokeldn.app.introspect import flags_of
 from pokeldn.lgpe.session import code_picks
+from pokeldn.sv.raid import REWARD_ROWS
 
 
 @cache
@@ -54,6 +56,9 @@ def _args(field: Field, value, tool: Tool) -> list[str]:
         out = files if not field.flag else [a for n, f in enumerate(files)
                                              for a in ((field.more if n and field.more else flags[0]), f)]
         return out + ([field.count, str(len(files))] if field.count else [])
+    if field.kind == "rewards":
+        return [part for row in (value or ())
+                for part in (flags[0], f"{row.get('item_id', '')}:{row.get('quantity', '')}")]
     if value in ("", None):
         return list(field.unset)
     items = str(value).split() if field.kind == "multi" else [field.template.format(value) if field.template
@@ -72,12 +77,17 @@ def build(tool: Tool, values: dict, extra: dict, settings, stamp: str | None = N
               "{src_var}": f"0x{random.getrandbits(32):08x}",
               "{ot}": settings.name(game), "{tid}": str(tid), "{sid}": str(sid),
               "{language}": str(settings.language)}
+    # A banked Pokemon keeps its PID and encryption constant: they are who it is [docs/gui.md, The bank].
+    banked = any(entry.get("bank") for field in tool.fields if field.kind == "pokemon"
+                 for entry in offers(value_of(field, values)))
     args = []
     for arg in tool.fixed:
         for token, value in tokens.items():
             arg = arg.replace(token, value)
         args.append(arg)
     for field in tool.fields:
+        if banked and field.key == "--fresh-pid":
+            continue
         if applies(field, tool, values):
             items = _args(field, value_of(field, values), tool)
             if field.kind == "builder":     # a backup's file is named after the run
@@ -88,7 +98,11 @@ def build(tool: Tool, values: dict, extra: dict, settings, stamp: str | None = N
         args += ["--keys", os.path.expanduser(settings.keys)]
     if "--capture" in known and settings.capture:
         args += ["--capture", f"captures/{tool.key}-{stamp}.jsonl"]
+    owned = (gift_builder.owned_flags(tool) if any(f.kind == "builder" for f in tool.fields)
+             else frozenset())
     for flag, value in extra.items():
+        if (banked and flag == "--fresh-pid") or flag in owned:
+            continue
         args += ([flag] if value is True else [] if value in (False, "", None) else [flag, str(value)])
     return args
 
@@ -125,7 +139,20 @@ def prepare(tool: Tool, values: dict) -> None:
 
 def code_error(field: Field, value) -> str:
     """A console code is eight digits, or empty where the field allows none; a Let's Go link code must
-    name three picker Pokemon. Either partial one would host under another code."""
+    name three picker Pokemon. Either partial one would host under another code. A raid seed is eight
+    hex digits; a raid reward row names an item and a quantity from 1 to 999."""
+    if field.kind == "raidseed":
+        return "" if re.fullmatch(r"[0-9A-Fa-f]{8}", str(value or "")) else "Enter eight hexadecimal digits."
+    if field.kind == "rewards":
+        rows = list(value or ())
+        if len(rows) > REWARD_ROWS:
+            return f"A raid gives at most {REWARD_ROWS} rewards."
+        for n, row in enumerate(rows, 1):
+            if not str(row.get("item_id", "")).isdigit() or not int(row["item_id"]):
+                return f"Choose an item for reward {n}."
+            if not str(row.get("quantity", "")).isdigit() or not 1 <= int(row["quantity"]) <= 999:
+                return f"Reward {n} needs a quantity from 1 to 999."
+        return ""
     if field.kind == "code":
         value = str(value or "")
         if (value == "" and not field.default) or (len(value) == 8 and value.isdigit()):
