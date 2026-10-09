@@ -1,15 +1,18 @@
 """What the app offers per game: each tool is an entry point, the tested flags it always gets, the
 fields a user fills in, and what to press on the console. Fixed arguments may carry {received}
 (the Received folder), {stamp} (the run's time) and {src_var} (a fresh random id)."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+
+from pokeldn.sv.raid import REWARD_ROWS
 
 
 @dataclass(frozen=True)
 class Field:
     flag: str | tuple[str, ...]   # "" is positional; a tuple passes the same value to each flag
     label: str
-    kind: str = "text"            # text number choice switch pokemon file builder multi linkcode code (eight
-                                  # digits), or a PKHeX name list: species move item ball
+    kind: str = "text"            # text number choice switch pokemon file builder multi linkcode code
+                                  # (eight digits) raidseed rewards, or a PKHeX name list: species move
+                                  # item ball
     help: str = ""
     default: str | bool = ""
     choices: tuple[tuple[str, str], ...] = ()
@@ -99,6 +102,41 @@ def queued(flag: str = "", help: str = "", **kw) -> Field:
     help = help or "Pick a species; PKHeX builds a legal one for this game."
     return offer(flag, help=f"{help} Add a trade to queue more: one session trades them in order.",
                  queue=QUEUE, **kw)
+
+
+ONLINE_CODE_HELP = ("Eight digits you and your partner agree on; you also enter them on the console. "
+                    "Empty meets anyone trading this game online without a code.")
+
+
+def without(fixed: tuple[str, ...], flag: str) -> tuple[str, ...]:
+    """`fixed` with `flag` and its value taken out."""
+    out, skip = [], False
+    for arg in fixed:
+        if skip:
+            skip = False
+        elif arg == flag:
+            skip = True
+        else:
+            out.append(arg)
+    return tuple(out)
+
+
+def online(host: Tool, steps: tuple[str, ...], code: Field) -> Tool:
+    """The host tool trading a partner far away instead of a built offer (docs/online.md). `code`
+    is the room both players enter, the console's own link code where the game has one."""
+    kept = tuple(f for f in host.fields if f.kind != "pokemon" and f is not FRESH_PID
+                 and f.flag not in ("--seconds", code.flag))
+    return Tool(host.key.replace("-host", "-online"), "Trade (Online)", host.script,
+                "Trade with a player far away: each of you hosts your own console, and the two trade "
+                "through the internet.",
+                ("Agree on a code with your partner, or leave it empty to meet anyone trading online.",
+                 "Start, then wait for 'Trading with' and your partner's name.", *steps,
+                 "Your partner's Pokemon appears once they offer it. The trade goes through once both "
+                 "of you confirm."),
+                (code,) + kept + ((host_seconds("1800", "Leave time to find a partner and trade."),)
+                                  if any(f.flag == "--seconds" for f in host.fields)
+                                  or "--seconds" in host.fixed else ()),
+                fixed=without(host.fixed, "--seconds") + ("--online",), doc="online.md")
 
 
 FRLG_PATH = "Pokemon Center 2F, third attendant, Direct Corner, Trade Center"
@@ -338,6 +376,51 @@ SV = Game("sv", "Scarlet & Violet", "SV", "sv.md", (
                 "--session-join", "--answer-migration", "--net-ack", "--ack-flags", "0x00",
                 "--game-channel", "--announce-timeout", "20", "--rtt-delay", "0.3",
                 "--trainer-name", "{ot}", "--offer-out", "{received}/sv-{stamp}.pk9"), doc="sv.md"),
+    Tool("sv-raid-host", "Tera Raid (Host)", "bin/sv_host.py",
+         "Host a Tera Raid the console joins: you choose the raid, its rewards and the Pokemon we bring.",
+         ("Choose the Pokemon our player brings, the raid and, if you like, its rewards.",
+          "Start the host.",
+          "On the console: X, Poke Portal, Tera Raid Battle, search offline, Link Code 4970.",
+          "Our player leaves when the battle starts; its Pokemon stays and fights at your side.",
+          "A communication error may show as the battle starts: dismiss it and fight on.",
+          "Win the raid to receive the rewards."),
+         (Field("--raid-pokemon", "Our Pokemon", "pokemon", required=True,
+                help="The Pokemon our player brings. PKHeX checks it is legal."),
+          Field("--raid-version", "Game", "choice", default="violet", group="The raid",
+                choices=(("scarlet", "Scarlet"), ("violet", "Violet")),
+                help="A seed can give another raid in the other version."),
+          Field("--raid-map", "Region", "choice", default="paldea", group="The raid",
+                choices=(("paldea", "Paldea"), ("kitakami", "Kitakami"), ("blueberry", "Blueberry"))),
+          Field("--raid-progress", "Story progress", "choice", default="4star", group="The raid",
+                choices=(("beginning", "Beginning"), ("tera", "Tera Raids unlocked"),
+                         ("3star", "3-star raids"), ("4star", "4-star raids"),
+                         ("5star", "5-star raids"), ("6star", "6-star raids")),
+                help="Sets how many stars a standard crystal can have."),
+          Field("--raid-content", "Crystal", "choice", default="standard", group="The raid",
+                choices=(("standard", "Standard"), ("black", "Black (6 stars)"))),
+          Field("--raid-seed", "Raid seed", "raidseed", default="000F34C3", required=True,
+                group="The raid", help="Eight hexadecimal digits. Find a raid searches seeds for you."),
+          Field("--raid-reward", "Rewards", "rewards",
+                help=f"Leave empty for the raid's own rewards, or list up to {REWARD_ROWS} items."),
+          host_seconds("600")),
+         fixed=("--channel", "1", "--scene-id", "7", "--max-participants", "4", "--code", "4970",
+                "--scarlet-response", "--session-flags", "0", "--session-packet-id", "1",
+                "--no-session-ack", "--join-seq", "0", "--update-seq", "0", "--update-delay", "0.02",
+                "--rtt-probe", "--clock", "--net-stations", "4", "--record-delay", "0.1",
+                "--record-spacing", "0.003", "--host-player-id", "00000000000000010000000000000000",
+                "--host-player-name", "{ot}", "--trainer-name", "{ot}"),
+         doc="sv_raid.md"),
+    Tool("sv-raid-join", "Tera Raid (Join)", "bin/sv_join.py",
+         "Join a Tera Raid the console hosts and leave one of your Pokemon to fight in it.",
+         ("On the console: a Tera Raid crystal, Challenge as a group, and wait for players.",
+          "Choose the Pokemon our player brings, then start the joiner.",
+          "Our player joins and readies; start the battle on the console.",
+          "Our player leaves as the battle starts; its Pokemon fights on as a partner."),
+         (Field("--raid-pokemon", "Our Pokemon", "pokemon", required=True,
+                help="The Pokemon our player brings. PKHeX checks it is legal."),
+          join_seconds("240")),
+         fixed=("--seconds", "900", "--name", "POKELDN", "--trainer-name", "{ot}"),
+         doc="sv_raid.md"),
 ))
 
 ZA = Game("za", "Legends Z-A", "PLZA", "za.md", (
@@ -366,4 +449,35 @@ ZA = Game("za", "Legends Z-A", "PLZA", "za.md", (
          doc="za.md"),
 ))
 
-GAMES = (FRLG, LGPE, SWSH, BDSP, PLA, SV, ZA)
+def with_online(game: Game, steps: tuple[str, ...], code: Field | None = None) -> Game:
+    """`game` with its online trade after its local trades; `code` replaces the host's own code field's
+    help, or is a new field where the game has no code."""
+    host = next(t for t in game.tools if t.name == "Trade (Host)")
+    if code is None:
+        code = next(f for f in host.fields if f.kind in ("code", "linkcode"))
+        code = replace(code, help=ONLINE_CODE_HELP if code.kind == "code" else
+                       "The three Pokemon you and your partner pick, in the same order, here and on "
+                       "the console.")
+    at = max(n for n, t in enumerate(game.tools) if t.name.startswith("Trade (")) + 1   # after Join
+    return replace(game, tools=game.tools[:at] + (online(host, steps, code),) + game.tools[at:])
+
+
+GAMES = (
+    with_online(FRLG, (f"{FRLG_PATH}, Join Group, then pick POKELDN.",
+                       "Your partner's party shows on the right: choose the Pokemon you send, then "
+                       "confirm."),
+                Field("--online-code", "Code", "code", help=ONLINE_CODE_HELP)),
+    with_online(LGPE, (LGPE_STEPS, "Choose a Pokemon and confirm.")),
+    with_online(SWSH, ("Y-Comm, Link Trade, local communication with the same Link Code; press A on "
+                       "both messages, then wait in the overworld.",
+                       "Choose the Pokemon to send when POKELDN appears.")),
+    with_online(BDSP, (f"{BDSP_ROOM} Our character appears.",
+                       "Y, Communicate, Trade Pokemon; accept the greeting, then choose."),
+                Field("--password", "Code", "code", help="Eight digits you and your partner agree "
+                      "on; you also enter them at the Union Room's password prompt. Empty: the "
+                      "plain room, and anyone trading online without a code.")),
+    with_online(PLA, (*PLA_STEPS, "Offer a Pokemon and confirm.")),
+    with_online(SV, (SV_SEARCH, "Offer and confirm on the trade screen.")),
+    with_online(ZA, ("X, Link Play, Link Trade, Nearby Players, the same code, then search.",
+                     "Pick on the trade box, offer, then trade.")),
+)

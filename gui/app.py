@@ -20,7 +20,7 @@ PORT_DENIED = "Port not allowed"
 
 @dataclass(frozen=True)
 class BoardStatus:
-    state: str     # missing, choose, checking, ready, flash, wrong-port, busy, denied
+    state: str     # missing, choose, checking, ready, flash, wrong-port, busy, denied, controller
     title: str
     detail: str
     port: str = ""
@@ -34,6 +34,7 @@ class App:
     """State shared by the pages: settings, the one child process a board allows, and services."""
 
     storage_busy = False
+    controllers = 0    # S3 controller boards on USB, polled
 
     def __init__(self, page: ft.Page):
         self.page = page
@@ -54,6 +55,7 @@ class App:
         self.update_state = ""                                  # checking, current, available, offline
         self.update_listeners: list = []                        # called on the UI loop after a check
         self.trainer_listeners: list = []                       # called on the UI loop when my_trainer changes
+        threading.Thread(target=self._watch_controllers, daemon=True).start()
 
     def trainer_read(self, found: dict, source: str = "console") -> None:
         """Keep the player's trainer and build for their game from now on (UI loop)."""
@@ -69,6 +71,16 @@ class App:
 
     def ui(self, fn) -> None:
         on_ui(self.page, fn)
+
+    def _watch_controllers(self) -> None:
+        """A controller board has no serial port, so the port list never shows it; USB does."""
+        import time
+        while True:
+            found = board.controllers()
+            if found != self.controllers:
+                self.controllers = found
+                self.ui(lambda: [listener() for listener in list(self.board_listeners)])
+            time.sleep(6 if sys.platform == "win32" else 2)
 
     @property
     def busy(self) -> bool:
@@ -101,6 +113,9 @@ class App:
                 return BoardStatus("missing", "Board found without a driver",
                                    tr("Windows has no driver for the {name}, so it has no COM port. {steps}",
                                       name=name, steps=steps))
+            if self.controllers:
+                return BoardStatus("controller", "Your board runs the Controller firmware",
+                                   "Trades need the Wireless firmware: install it from the Board page.")
             return BoardStatus("missing", "No board plugged in",
                                "Plug the ESP32 in with a USB data cable. Charge-only cables show nothing.")
         port = device or self.radio_port(present)
@@ -117,7 +132,10 @@ class App:
                 return BoardStatus("ready", "Board ready", tr("pokeldn firmware{version} answered.", version=version),
                                    port)
             return BoardStatus("flash", "Firmware out of date",
-                               "Flash the board to update it.", port)
+                               "Update it on the Board page.", port)
+        if isinstance(ident, board.PadIdentity):
+            return BoardStatus("controller", "Your board runs the Controller firmware",
+                               "Trades need the Wireless firmware: install it from the Board page.", port)
         if ident == PORT_DENIED:
             group = "uucp" if os.path.exists("/etc/arch-release") else "dialout"
             fix = (tr("Add yourself to the {group} group (sudo usermod -aG {group} $USER), then log out and "
@@ -135,7 +153,8 @@ class App:
                                       "cable to the port marked USB (not COM or UART).", chip=self.chips[port]),
                                    port)
             return BoardStatus("flash", "No pokeldn firmware on the board",
-                               "Flash the board. If you just flashed it, press its RESET (RST) button.",
+                               "Install the Wireless firmware on the Board page. If you just installed it, press the "
+                               "board's RESET (RST) button.",
                                port)
         return BoardStatus("checking", "Checking the board", "Asking the board for its firmware.", port)
 
@@ -153,15 +172,19 @@ class App:
                 say(f"[app] {ident.firmware}, protocol {ident.protocol}, chip revision "
                     f"{ident.chip_revision}, MAC {ident.sta_mac}")
                 if not ident.current:
-                    say("[app] This firmware uses a different radio protocol. Flash the board.")
+                    say("[app] This firmware uses a different radio protocol. Update it on the Board page.")
             except serial.SerialException as error:
                 # pyserial keeps the open's errno: EACCES is a missing group on Linux, not a busy port.
                 self.identities[device] = PORT_DENIED if error.errno == errno.EACCES else PORT_BUSY
                 say(f"[app] Could not open {device}: {error}")
             except Exception as error:
-                self.identities[device] = NO_FIRMWARE
-                say(f"[app] No pokeldn firmware answered on {device} ({error}).")
-                self._probe_chip(device, say)
+                try:
+                    self.identities[device] = board.identify_pad(device)
+                    say(f"[app] {device} runs the controller firmware.")
+                except Exception:
+                    self.identities[device] = NO_FIRMWARE
+                    say(f"[app] No pokeldn firmware answered on {device} ({error}).")
+                    self._probe_chip(device, say)
             finally:
                 self.board_busy = False
                 self.ui(lambda: [listener() for listener in list(self.board_listeners)])

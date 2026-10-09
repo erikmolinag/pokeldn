@@ -8,25 +8,30 @@ import flet as ft
 from gui import board
 from gui.app import keys_found
 from pokeldn import pokemon as builder
-from pokeldn.app import command, received, runner
+from pokeldn.app import bank, command, gift_builder, online, received, runner
 from gui import theme as t
 from gui.i18n import tr
 from pokeldn.app.catalog import APP_GAMES as GAMES, Field, Game, Tool
 from pokeldn.app.introspect import flags_of
 from pokeldn.app.paths import SESSION
 from gui.views.pokemon import NAME_LISTS, LinkCodePicker, NamePicker, OfferQueue, PokemonPicker
+from gui.views.raid_seed import RaidSeedPicker
+from gui.views.rewards import RewardPicker
 from gui.views.gifts import GiftBuilder
 from gui.views.sprites import MINI, Sprite
 from gui.views.trainer import trainer_card
 from gui.views.widgets import CodeBlock, DigitCode, Log, PathField, open_folder
 
-TOOL_ICONS = {"Trade": "arrows-horizontal", "Mystery Gift": "gift", "Read my trainer": "trainer"}
+TOOL_ICONS = {"Trade": "arrows-horizontal", "Mystery Gift": "gift", "Read my trainer": "trainer",
+              "Tera Raid": "diamond-gem"}
 EMPTY = "-"   # a dropdown option cannot carry an empty key
 ADVANCED_NOTE = ("The tested defaults work for most players. Change these only when a guide or a bug report "
                  "asks you to. A value set here overrides the Basic tab.")
 
 
 def tool_icon(tool: Tool):
+    if tool.key.endswith("-online"):
+        return "globe"
     return TOOL_ICONS.get(tool.name.split(" (")[0], "arrows-horizontal")
 
 
@@ -36,6 +41,8 @@ def tool_role(tool: Tool) -> str:
         return tr("Your console joins pokeldn")
     if tool.key.endswith("-join"):
         return tr("pokeldn joins your console")
+    if tool.key.endswith("-online"):
+        return tr("Your console joins pokeldn, which meets your partner online")
     return ""
 
 
@@ -99,7 +106,8 @@ class GamesView:
             self.render_body()
             self.cards.update()
 
-    def enter(self, tool: str = "", gift_mode: str = "", **_) -> None:
+    def enter(self, game: str = "", tool: str = "", gift_mode: str = "", **_) -> None:
+        """`tool` is a catalog key: the bank opens the trade it queued a Pokemon for."""
         self.visible = True
         picked = next((x for x in self.game.tools if x.key == tool), None)
         if picked is not None and picked is not self.tool and not self.single:
@@ -145,6 +153,19 @@ class GamesView:
         if rebuild:
             self.render_body()
             self.cards.update()
+        self.session.refresh()
+
+    def set_raid_context(self, context: dict[str, str]) -> None:
+        """The raid finder's choice brings its version, region, progress and crystal with it."""
+        self.values.update({
+            "--raid-version": context["version"],
+            "--raid-map": context["map_name"],
+            "--raid-progress": context["progress"],
+            "--raid-content": context["content"],
+        })
+        self.app.settings.save()
+        self.render_body()
+        self.cards.update()
         self.session.refresh()
 
     # Rendering
@@ -328,6 +349,18 @@ class GamesView:
             return PokemonPicker(self.app, self.game.key, first[0] if first else {},
                                  lambda v: self.set_value(field, v),
                                  version=str(self.values.get("--version", ""))).control
+        if field.kind == "rewards":
+            return RewardPicker(self.app, self.game.key, value,
+                                lambda v: self.set_value(field, v)).control
+        if field.kind == "raidseed":
+            return RaidSeedPicker(self.app, value,
+                                  lambda v: self.set_value(field, v),
+                                  context=lambda: {
+                                      "version": str(self.values.get("--raid-version", "violet")),
+                                      "map_name": str(self.values.get("--raid-map", "paldea")),
+                                      "progress": str(self.values.get("--raid-progress", "4star")),
+                                      "content": str(self.values.get("--raid-content", "standard")),
+                                  }, on_context_change=self.set_raid_context).control
         if field.kind == "linkcode":
             return LinkCodePicker(self.app, value, lambda v: self.set_value(field, v)).control
         if field.kind == "code":
@@ -374,6 +407,9 @@ class GamesView:
             return
         query = self.search.lower().strip()
         hidden = {f.key: f for f in self.tool.fields if f.hidden}
+        if any(f.kind == "builder" for f in self.tool.fields):   # the Gift card sets these
+            owned = gift_builder.owned_flags(self.tool)
+            flags = [f for f in flags if f.option not in owned]
         rows = []
         # The settings kept off the Basic tab come first.
         for flag in sorted(flags, key=lambda f: f.option not in hidden):
@@ -473,8 +509,11 @@ class SessionPanel:
         self.trainer_box = ft.Container(visible=False)   # the console's trainer, once a host reports it
         self.offering = ft.Container(visible=False)
         self.transfer = ft.Container(visible=False)   # a save backup or restore's progress
+        self.partner = ft.Container(visible=False)    # an online trade's partner
+        self.partner_state = None                     # pokeldn.app.online.Partner
         self.offered = None                # what the offering card shows, to rebuild it only on a change
         self.traded = 0                    # the run's completed trades, from its `[done] trade N` lines
+        self.banked: list[str] = []        # the bank id of each offer the run trades, "" for a built one
         self.running_tool: Tool | None = None
         self.restart = False               # Start on another tool: stop this run, then start that one
         self.received = ft.Container(visible=False)
@@ -495,8 +534,8 @@ class SessionPanel:
         self.control = t.panel(ft.Column([
             t.panel_header(tr("Session"), self.status),
             # The checklist and the steps scroll; Start stays in view below them.
-            ft.Container(t.fade(ft.Column([self.trainer_box, self.board_line, self.offering, self.transfer,
-                                           self.received, self.steps],
+            ft.Container(t.fade(ft.Column([self.trainer_box, self.board_line, self.partner, self.offering,
+                                           self.transfer, self.received, self.steps],
                                           spacing=24,
                                           scroll=ft.ScrollMode.AUTO)),
                          padding=ft.Padding(18, 8, 18, 0), expand=3),
@@ -540,6 +579,7 @@ class SessionPanel:
             self.seen, self.received.content, self.received.visible = {}, None, False
             self.transfer.content, self.transfer.visible = None, False
             self.trainer_box.content, self.trainer_box.visible = None, False
+            self.partner.content, self.partner.visible, self.partner_state = None, False, None
             self.traded = 0
         self.tool = tool
         self.steps.content = t.section(tr("On the console"), t.step_list([tr(step) for step in tool.steps]))
@@ -562,7 +602,7 @@ class SessionPanel:
         state is ok, wait, warn (Start still allowed) or block."""
         status = self.app.board_status()
         board_state = ("ok" if status.ready else "wait" if status.state == "checking" else
-                       "block" if status.state in ("missing", "choose") else "warn")
+                       "block" if status.state in ("missing", "choose", "controller") else "warn")
         items = [
             ("ok", tr("Switch keys added"), "", "") if keys_found(self.app.settings.keys) else
             ("block", tr("Add your Switch keys"), tr("Choose prod.keys in Settings."), "settings"),
@@ -621,11 +661,15 @@ class SessionPanel:
         if update:
             self.control.update()
 
+    def offered_entries(self) -> list[dict]:
+        """The queued offers in the order the launcher trades them."""
+        return [entry for field in self.tool.fields
+                if field.kind == "pokemon" and command.applies(field, self.tool, self.games.values)
+                for entry in command.offers(command.value_of(field, self.games.values))[:field.queue]
+                if entry.get("file")]
+
     def render_offering(self) -> None:
-        entries = [entry for field in self.tool.fields
-                   if field.kind == "pokemon" and command.applies(field, self.tool, self.games.values)
-                   for entry in command.offers(command.value_of(field, self.games.values))[:field.queue]
-                   if entry.get("file")]
+        entries = self.offered_entries()
         shown = [(int(e.get("species") or 0), bool(e.get("shiny")), e.get("summary", "")) for e in entries]
         if (shown, self.traded) == self.offered:
             return
@@ -662,6 +706,41 @@ class SessionPanel:
                       unit=unit), 12, t.MUTED)], spacing=6))
         self.transfer.update()
 
+    def show_partner(self, partner) -> None:
+        """Who the online trade meets, what they offer and whether they confirmed."""
+        self.partner_state = partner
+        looks = {"looking": ("refresh", t.BLUE, "Connecting to the relays"),
+                 "waiting": ("refresh", t.BLUE, "Looking for a partner"),
+                 "paired": ("user", t.GREEN, f"Trading with {partner.name}"),
+                 "lost": ("warning-diamond", t.RED, f"{partner.name or 'Your partner'} left")}
+        icon, color, title = looks[partner.state]
+        if partner.state in ("looking", "waiting"):
+            code = partner.code.removeprefix("code ")
+            detail = ("Anyone trading this game online without a code can be your partner."
+                      if partner.code == "no code" else f"Your partner enters the same code: {code}.")
+        elif partner.state == "lost":
+            detail = "Back out of the trade on the console. Start again to find a partner."
+        elif partner.offer:
+            detail = "They confirmed. Confirm on your console to trade." if partner.confirmed else \
+                "Waiting for them to confirm."
+        else:
+            detail = "Offer a Pokemon on your console; theirs appears here once they choose."
+        rows = [ft.Row([t.pixel_icon(icon, color=color),
+                        ft.Column([t.text(title, 13, weight=ft.FontWeight.W_600),
+                                   t.text(detail, 12, t.MUTED)], spacing=1, expand=True)],
+                       spacing=8, vertical_alignment=ft.CrossAxisAlignment.START)]
+        if partner.offer and partner.state == "paired":
+            species, shiny, summary = partner.offer
+            rows.append(pokemon_row(self.app, species, shiny, summary))
+            if partner.flag:
+                rows.append(t.text(f"PKHeX flags it: {partner.flag}", 12, t.AMBER))
+        if partner.note:
+            rows.append(t.text(partner.note, 12, t.AMBER))
+        trailing = t.text(f"{partner.trades} traded", 12, t.GREEN) if partner.trades else None
+        self.partner.content = t.section("Partner", ft.Column(rows, spacing=10), trailing=trailing)
+        self.partner.visible = True
+        self.partner.update()
+
     def scan_received(self, run: tuple) -> None:
         """Read each Pokemon file the run has saved so far; a file still growing is read again."""
         process, stamp, game = run
@@ -681,6 +760,11 @@ class SessionPanel:
                 return
             self.seen[path] = (size, mtime, info)
             changed = True
+            if info is not None:
+                try:
+                    bank.deposit(game, path, info)
+                except OSError as error:
+                    self.app.ui(lambda m=f"[app] Not banked: {error}": self.log.add(m))
         if changed:
             self.app.ui(lambda: self.render_received(process))
 
@@ -752,7 +836,9 @@ class SessionPanel:
         self.log.add(f"[app] {tool.name} · {self.games.game.name} · radio {port}")
         self.seen, self.received.content, self.received.visible = {}, None, False
         self.transfer.content, self.transfer.visible = None, False
+        self.partner.content, self.partner.visible, self.partner_state = None, False, None
         self.traded = 0
+        self.banked = [entry.get("bank", "") for entry in self.offered_entries()]
         self.stopping = False
         self.app.process_label = tool.name
         self.running_tool = tool
@@ -796,9 +882,17 @@ class SessionPanel:
             self.app.ui(lambda: self.show_trainer(found))
         if progress := received.save_progress(line):
             self.app.ui(lambda: self.show_transfer(*progress))
+        partner = online.update(self.partner_state, line)
+        if partner is not self.partner_state:
+            self.partner_state = partner
+            self.app.ui(lambda p=partner: self.show_partner(p) if self.partner_state is p else None)
         n = received.trades_done(line)
         if n is not None and n > self.traded:
             def mark():
+                # A banked Pokemon leaves the bank once its trade completes.
+                for gone in self.banked[self.traded:n]:
+                    if gone:
+                        bank.remove(gone)
                 self.traded = n
                 self.render_offering()
                 self.offering.update()
@@ -832,6 +926,7 @@ class SessionPanel:
             else:
                 self.set_status(f"Failed ({code})", t.RED)
             self.log.add(f"[app] Exited with code {code}.")
+            bank.prune(self.app.settings)     # the traded ones leave the queue too
             if self.games.visible and self.games.tool is self.running_tool:
                 self.games.render_body()      # a backup has joined the save library
                 self.games.cards.update()

@@ -17,17 +17,22 @@ installed on the Switch or Switch 2. Seven games are supported:
 | | FRLG | LGPE | SwSh | BDSP | PLA | SV | PLZA |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | Trade | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Online trade, two players far apart | ✓ | ○ | ○ | ○ | ○ | ✓ | ○ |
 | Mystery Gift | ✓ | ∅ | ✓ | ∅ | ∅ | ∅ | ∅ |
 | Link battle | ✓ | ✗ | ✗ | ✗ | ∅ | ✗ | ✗ |
 | Code on the console, save read and write | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
 
-✓ works on a retail console · ✗ not done · ∅ the game has no such feature over local wireless
+✓ works on a retail console · ○ built and tested offline, untried on a retail console · ✗ not done ·
+∅ the game has no such feature over local wireless
 FRLG FireRed/LeafGreen · LGPE Let's Go Pikachu/Eevee · SwSh Sword/Shield · BDSP Brilliant Diamond/Shining Pearl · PLA Legends Arceus · SV Scarlet/Violet · PLZA Legends Z-A
 
 FRLG supports both versions in English, French, German, Italian, Spanish and Japanese. The added
 editions have offline cartridge-ROM tests; their wireless delivery still needs retail checks.
 
-Every game trades through the ESP32 board. Protocol documentation:
+Scarlet and Violet also host and join local Tera Raids, with a chosen boss and rewards
+([Tera Raids](docs/sv_raid.md)). Every game trades through the ESP32 board. Online trade joins two players far apart: each hosts
+their own console, and the two apps meet through public Nostr relays under a shared code, with no
+server to run ([online trade](docs/online.md)). Protocol documentation:
 [decryptu.github.io/pokeldn](https://decryptu.github.io/pokeldn/).
 
 ---
@@ -45,7 +50,11 @@ parts of the code.
 The [releases](https://github.com/Decryptu/pokeldn/releases) carry a desktop app for macOS (Apple
 silicon), Windows and Linux. It includes the radio firmware and flashes the board, builds legal
 Pokemon to offer with [PKHeX.Core](https://github.com/kwsch/PKHeX), and runs every trade and Mystery
-Gift below with the tested settings. The only file it asks for is `prod.keys`.
+Gift below with the tested settings. The only file it asks for is `prod.keys`. Its Bank keeps every
+Pokemon a trade brings in and trades one into another game wherever HOME would move it, converted
+and checked by PKHeX ([the bank](docs/gui.md#the-bank)). Its Control page turns an ESP32-S3 into a
+wired controller for the Switch: press its buttons from the computer, record and edit macros, and
+share them as `.pokemacro` files ([the controller](docs/gui.md#the-controller)).
 
 - macOS: the app is unsigned, so the first launch is blocked. Open it once and close the warning,
   then System Settings, Privacy & Security, scroll down to Security, Open Anyway next to pokeldn,
@@ -89,7 +98,8 @@ Both launchers accept `--gift-file FILE`. Native conversion and the file schema 
   Serial/JTAG, flashed with [`firmware/esp32`](firmware/esp32) for its chip. All use 2.4 GHz.
   Board requirements and hardware verification are on [ESP32 radio](docs/hardware_esp32.md#supported-boards).
 - Optional: a 128x64 SSD1306, SSD1315 or SSD1309 I2C OLED on the board (classic ESP32: SDA D21, SCL
-  D22; ESP32-S3: SDA GPIO8, SCL GPIO9; VCC 3V3) shows
+  D22; ESP32-S3: SDA GPIO8, SCL GPIO9; VCC 3V3), or the 72x40 screen built into the 0.42-inch
+  ESP32-C3 OLED board (ABRobot and its clones), shows
   the radio's traffic, the Pokemon each trade sends and receives, and the Mystery Gift card; idle,
   it dims after a minute and turns off after ten, and BOOT wakes it
   ([The screen](docs/hardware_esp32.md#the-screen)).
@@ -214,8 +224,8 @@ news only if it differs from what it holds; `--news-id N` forces a new one.
 writes a `.sav` back: beside the console's own save, every sector read back, then the game loads it
 and saves; anything short of that leaves the console's save as it was. In the app, the Mystery Gift
 tool's Your save tab keeps the backups, names them, imports and exports `.sav` files and edits the
-trainer and party through PKHeX. A backup took about four minutes on a retail French FireRed; the
-restore is proven against the scripted console and has not yet run on a retail Switch. [Save backup and restore](docs/frlg_gift.md#save-backup-and-restore).
+trainer and party through PKHeX. A backup took about four minutes on a retail French FireRed; a
+restore on a retail English FireRed loaded with CONTINUE, a French save included. [Save backup and restore](docs/frlg_gift.md#save-backup-and-restore).
 
 ```bash
 ./.venv/bin/python -u bin/frlg_mg_host.py --live --save-backup backup.sav --save-resume-dir partial
@@ -254,7 +264,8 @@ later trades.
 ```
 
 Console: Communiquer, Communication locale, Échange, link code Pikachu ×3, wait on the search
-screen. See [Let's Go](docs/lgpe.md).
+screen. For an emulated console over the LAN, use `lgpe_host.py --ip-host --our-ip IP`. See
+[Let's Go](docs/lgpe.md).
 
 ### Sword and Shield
 
@@ -367,6 +378,13 @@ Console: X → Poké Portal → Link Trade → offline, no code → search. A re
 offers one record per trade in the same seat. The wire-level requirements
 (identity message order, acknowledgement `lowest_pending`) are in [Scarlet and Violet](docs/sv.md).
 
+Both also run a local Tera Raid. `--raid-seed` hosts one the console joins (Poké Portal → Tera
+Raid Battle, Link Code 4970): the seed and four context flags choose the boss, `--raid-reward
+ITEM:QUANTITY` replaces its rewards, and `--raid-pokemon` is the Pokémon pokeldn's player brings.
+`bin/sv_join.py --raid-pokemon FILE` joins a raid the console hosts. In both, pokeldn's player
+leaves as the battle starts and its Pokémon stays to fight beside the console's. The app's two
+Tera Raid tools carry the flags; see [Tera Raids](docs/sv_raid.md).
+
 ### Legends Z-A
 
 The Link Trade search alternates hosting and scanning, so pokeldn joins or hosts. Console: Link Trade →
@@ -399,12 +417,27 @@ because Z-A's layout is Scarlet's. See [Legends Z-A](docs/za.md).
 
 ## Credits
 
+pokeldn is a fork of [MercuryEnigma/frlg-ldn-trade](https://github.com/MercuryEnigma/frlg-ldn-trade)
+by [MercuryEnigma](https://github.com/MercuryEnigma), itself a fork of
+[tornadus/frlg-ldn-trade](https://github.com/tornadus/frlg-ldn-trade) by
+[tornadus](https://github.com/tornadus), with contributions from
+[trowgundam](https://github.com/trowgundam).
+
+Contributors to this repository (GitHub does not list contributors on a fork):
+
+- [Gr3nSkyDragon](https://github.com/Gr3nSkyDragon): ESP32-S3 firmware
+- [ismailhasannnnnn](https://github.com/ismailhasannnnnn): Scarlet/Violet Tera Raid hosting and joining
+- [easyworld](https://github.com/easyworld): ESP32 serial reconnects after a high-baud session
+
 - [kinnay](https://github.com/kinnay): the [LDN library](https://github.com/kinnay/LDN) this builds on,
   and the [NintendoClients wiki](https://github.com/kinnay/NintendoClients/wiki)
 - [pokefirered](https://github.com/pret/pokefirered): decompilation of FireRed/LeafGreen, including
   the Switch port
 - [GB-Link Team](https://github.com/GB-Link/GB-Link-Switch-LDN): the custom FireRed/LeafGreen Wonder
   Cards in `vendor/gblink-cards/` (GPL-3.0)
+- [xCyrusBR](https://github.com/xCyrusBR): [TeraLoop-Bridge](https://github.com/xCyrusBR/TeraLoop-Bridge)
+  and [SV-Past-Tera-Raid](https://github.com/xCyrusBR/SV-Past-Tera-Raid), Scarlet/Violet Tera Raid
+  work
 
 ## License
 
