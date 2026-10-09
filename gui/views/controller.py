@@ -705,7 +705,7 @@ class ControllerView:
                 chips.controls = [ft.Container(
                     t.text(k, 12, t.TEXT if k in chosen else t.MUTED, weight=ft.FontWeight.W_600),
                     padding=ft.Padding(10, 4, 10, 4), border_radius=999,
-                    bgcolor=t.SELECTED if k in chosen else ft.Colors.with_opacity(0.06, "#FFFFFF"),
+                    bgcolor=t.SELECTED if k in chosen else t.CARD,
                     on_click=lambda e, k=k: toggle(k)) for k in m.KEYS]
 
             def toggle(k):

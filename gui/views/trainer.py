@@ -42,7 +42,6 @@ def trainer_card(app, compact: bool = False) -> ft.Control:
     gender, version = int(mine.get("gender") or 0), mine.get("version") or ""
     language = tr(LANGUAGE_NAMES.get(int(mine.get("language") or 2), "English"))
     game = tr(VERSION_NAMES.get(version, "FireRed & LeafGreen"))
-    top, bottom = VERSION_COLORS.get(version, VERSION_COLORS["firered"])
     sign = t.pixel_icon("female" if gender else "male", size=18, color=GIRL if gender else BOY)
     if compact:
         return ft.Container(ft.Row([
@@ -61,8 +60,7 @@ def trainer_card(app, compact: bool = False) -> ft.Control:
         ft.Container(t.text(game, 11, t.INK, weight=ft.FontWeight.W_800), padding=ft.Padding(10, 4, 10, 4),
                      border_radius=12, bgcolor=ft.Colors.with_opacity(0.22, "#FFFFFF")),
     ], spacing=10), padding=ft.Padding(20, 14, 16, 14),
-        gradient=ft.LinearGradient(begin=ft.Alignment.CENTER_LEFT, end=ft.Alignment.CENTER_RIGHT,
-                                   colors=[bottom, top]))
+        gradient=t.gradient(ft.Alignment.CENTER_LEFT, ft.Alignment.CENTER_RIGHT))
     body = ft.Container(ft.Column([
         ft.Row([
             _avatar(name, gender, 72),

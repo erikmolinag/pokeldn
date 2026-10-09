@@ -52,6 +52,7 @@ MATERIAL = {
     "trainer": ft.Icons.BADGE_ROUNDED,
     "pokeball": ft.Icons.CATCHING_POKEMON,
     "language": ft.Icons.TRANSLATE_ROUNDED,
+    "fork": ft.Icons.CALL_SPLIT_ROUNDED,
     # upstream's newer pages (bank, online trade, controller, raids)
     "arrow-down": ft.Icons.ARROW_DOWNWARD_ROUNDED,
     "arrow-left": ft.Icons.ARROW_BACK_ROUNDED,

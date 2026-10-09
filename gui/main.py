@@ -42,22 +42,24 @@ ALIASES = {"home": "menu", "board": "options", "settings": "options", "docs": "o
 TOOL_SCREENS = {"frlg-trainer": "trainer", "frlg-trade-host": "trade", "frlg-trade-join": "trade",
                 "frlg-trade-online": "trade",
                 "frlg-gift": "gift"}
-# screen key -> (icon, title, detail), the header each screen shows
+# screen key -> (icon, title, detail), what the top bar shows on each screen
 SCREENS = {
-    "trade": ("arrows-horizontal", "TRADE", "Send a Pokemon built for your save, or receive one."),
-    "gift": ("gift", "MYSTERY GIFT", "Items, eggs, event Pokemon and game boosts."),
-    "team": ("pokeball", "POKEMON", "Build the Pokemon you will trade: they belong to your trainer."),
-    "trainer": ("trainer", "MY TRAINER", "Read your name, Trainer ID and Secret ID from the console."),
-    "save": ("save", "MY SAVE", "Copy your whole save to this computer, or put one back."),
-    "bank": ("package", "BANK", "Keep Pokemon on this computer and send them back to a game."),
-    "options": ("gear", "OPTIONS", "Board, language, keys and the guide."),
+    "trade": ("arrows-horizontal", "Trade", "Send a Pokemon built for your save, or receive one."),
+    "gift": ("gift", "Mystery Gift", "Items, eggs, event Pokemon and game boosts."),
+    "team": ("pokeball", "Pokemon", "Build the Pokemon you will trade: they belong to your trainer."),
+    "trainer": ("trainer", "My trainer", "Read your name, Trainer ID and Secret ID from the console."),
+    "save": ("save", "My save", "Copy your whole save to this computer, or put one back."),
+    "bank": ("package", "Bank", "Keep Pokemon on this computer and send them back to a game."),
+    "options": ("gear", "Options", "Board, language, keys and the guide."),
 }
+FORK = "https://github.com/erikmolinag/pokeldn"
+BAR = ft.Colors.with_opacity(0.80, "#FFFFFF")
 
 
 def main(page: ft.Page) -> None:
     page.title = "pokeldn"
-    page.fonts = {t.FONT: "fonts/Rubik.ttf"}
-    page.theme_mode = ft.ThemeMode.DARK
+    page.fonts = {t.FONT: "fonts/Nunito.ttf"}
+    page.theme_mode = ft.ThemeMode.LIGHT
     page.theme = page.dark_theme = t.app_theme()
     page.bgcolor = t.BG
     page.padding = 0
@@ -71,7 +73,8 @@ def main(page: ft.Page) -> None:
     i18n.set_language(app.settings.ui_language)
     views: dict[str, object] = {}
     content = ft.Container(expand=True)
-    hints = ft.Row(spacing=30, alignment=ft.MainAxisAlignment.END, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+    hints = ft.Row(spacing=24, alignment=ft.MainAxisAlignment.END, vertical_alignment=ft.CrossAxisAlignment.CENTER)
+    heading = ft.Container()
     status = ft.Row(spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER)
     current = {"key": "menu"}
 
@@ -102,20 +105,63 @@ def main(page: ft.Page) -> None:
 
     def hint(letter: str, label: str) -> ft.Control:
         from gui.views.screen import key_chip
-        return ft.Row([key_chip(letter), t.text(tr(label), 17, weight=ft.FontWeight.W_800)], spacing=10, tight=True)
+        return ft.Row([key_chip(letter), t.text(tr(label), 14, t.SOFT, weight=ft.FontWeight.W_800)], spacing=8,
+                      tight=True)
+
+    def pill(content: ft.Control, on_click, tooltip: str = "", padding=ft.Padding(16, 10, 18, 10)) -> ft.Control:
+        return ft.Container(content, padding=padding, border_radius=999, bgcolor=t.PANEL,
+                            border=ft.Border.all(1, t.OUTLINE), shadow=t.SHADOW, on_click=on_click,
+                            tooltip=tooltip or None)
+
+    def trainer_chip() -> ft.Control:
+        from gui.views.trainer import BOY, GIRL
+        mine = app.settings.my_trainer
+        if mine.get("name"):
+            gender = int(mine.get("gender") or 0)
+            face = t.text(mine["name"][:1].upper(), 17, t.INK, weight=ft.FontWeight.W_900)
+            body = ft.Column([t.text(mine["name"], 15, weight=ft.FontWeight.W_900),
+                              t.text(f"{tr('Trainer ID')} {int(mine['tid']):05d}", 11, t.MUTED,
+                                     weight=ft.FontWeight.W_800)], spacing=0, tight=True)
+            color = GIRL if gender else BOY
+        else:
+            face, color = t.pixel_icon("trainer", size=20, color=t.INK), t.FAINT
+            body = t.text(tr("Read now"), 14, weight=ft.FontWeight.W_800)
+        avatar = ft.Container(face, width=38, height=38, border_radius=19, bgcolor=color,
+                              alignment=ft.Alignment.CENTER)
+        return pill(ft.Row([avatar, body], spacing=10, tight=True), lambda e: navigate("trainer"),
+                    padding=ft.Padding(6, 6, 18, 6))
 
     def render_chrome() -> None:
-        on_menu = current["key"] == "menu"
-        hints.controls = ([hint("↕", "Move"), hint("A", "Choose")] if on_menu else
-                          [hint("B", "Back")])
+        key = current["key"]
+        if key == "menu":
+            heading.content = ft.Row([
+                ft.Container(ft.Image(src="pokeball.svg", width=32, height=32), width=50, height=50,
+                             border_radius=25, bgcolor=t.PANEL, alignment=ft.Alignment.CENTER, shadow=t.SHADOW),
+                ft.Column([t.text("pokeldn", 26, t.NAVY, weight=ft.FontWeight.W_900),
+                           t.text(tr("FireRed & LeafGreen"), 12, t.MUTED, weight=ft.FontWeight.W_800)],
+                          spacing=0, tight=True),
+            ], spacing=14)
+            hints.controls = [hint("↕", "Move"), hint("A", "Choose")]
+        else:
+            icon, title, detail = SCREENS[key]
+            heading.content = ft.Row([
+                ft.Container(t.pixel_icon("arrow-left", size=24, color=t.TEXT), width=48, height=48,
+                             border_radius=24, bgcolor=t.PANEL, alignment=ft.Alignment.CENTER, shadow=t.SHADOW,
+                             border=ft.Border.all(1, t.OUTLINE), on_click=lambda e: back(),
+                             tooltip=tr("Back to the menu (Esc)")),
+                t.badge_icon(icon, 48, 24),
+                ft.Column([t.text(tr(title), 24, weight=ft.FontWeight.W_900),
+                           t.text(tr(detail), 13, t.MUTED, weight=ft.FontWeight.W_700)], spacing=0, tight=True),
+            ], spacing=14)
+            hints.controls = [hint("B", "Back")]
         board = app.board_status()
-        mine = app.settings.my_trainer
-        game = {"firered": "FireRed", "leafgreen": "LeafGreen"}.get(mine.get("version") or "", "FireRed & LeafGreen")
+        color = t.GREEN if board.ready else t.INFO if board.state == "checking" else t.AMBER
+        label = tr("Board ready on {port}", port=board.port) if board.ready else tr(board.title)
         status.controls = [
-            ft.Container(width=14, height=14, border_radius=7,
-                         bgcolor=t.GREEN if board.ready else t.AMBER if board.state != "checking" else t.INFO,
-                         tooltip=tr(board.title)),
-            t.text(f"POKELDN · {tr(game).upper()}", 21, weight=ft.FontWeight.W_900),
+            pill(ft.Row([ft.Container(width=10, height=10, border_radius=5, bgcolor=color),
+                         t.text(label, 14, t.SOFT, weight=ft.FontWeight.W_800)], spacing=8, tight=True),
+                 lambda e: navigate("options", tab="board"), tr(board.detail)),
+            trainer_chip(),
         ]
 
     def navigate(key: str, **kwargs) -> None:
@@ -177,12 +223,22 @@ def main(page: ft.Page) -> None:
     app.board_listeners.append(chrome_changed)
     app.trainer_listeners.append(chrome_changed)
     page.on_keyboard_event = keyboard     # set once, before a code box takes the focus
-    page.add(t.backdrop(ft.Stack([
-        ft.Container(status, left=48, top=26),
-        ft.Container(content, left=40, right=40, top=76, bottom=78),
-        ft.Container(ft.Container(hints, padding=ft.Padding(48, 0, 48, 0)), left=0, right=0, bottom=0, height=62,
-                     bgcolor=ft.Colors.with_opacity(0.62, "#0B0420")),
-    ], expand=True)))
+    fork = ft.Container(ft.Row([
+        t.pixel_icon("fork", size=16, color=t.MUTED),
+        t.text(tr("pokeldn · a fork by {name}", name="erks"), 13, t.MUTED, weight=ft.FontWeight.W_800),
+        t.text("github.com/erikmolinag/pokeldn", 13, t.ACCENT, weight=ft.FontWeight.W_800),
+    ], spacing=8, tight=True), on_click=lambda e: page.run_task(app.open_url, FORK), tooltip=FORK)
+    page.add(t.backdrop(ft.Column([
+        ft.Container(ft.Row([heading, ft.Container(expand=True), status],
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                     height=84, padding=ft.Padding(32, 0, 32, 0), bgcolor=BAR,
+                     border=ft.Border(bottom=ft.BorderSide(1, t.OUTLINE))),
+        ft.Container(content, expand=True, padding=ft.Padding(32, 26, 32, 24)),
+        ft.Container(ft.Row([fork, ft.Container(expand=True), hints],
+                            vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                     height=54, padding=ft.Padding(32, 0, 32, 0), bgcolor=BAR,
+                     border=ft.Border(top=ft.BorderSide(1, t.OUTLINE))),
+    ], spacing=0, expand=True)))
     navigate("menu")
     if not page.web:
         page.run_task(page.window.center)

@@ -3,41 +3,45 @@ import flet.canvas as cv
 
 from gui.icons import icon as pixel_icon
 
-# poke-app: the pause menu of a modern Pokemon game. A vivid orange and purple backdrop split on a slant,
-# translucent dark-violet panels with white text over it, and the orange-red of the menu as the one accent.
-ORANGE = "#FF6A1F"
-ORANGE_DEEP = "#FF4E2A"
-VIOLET = "#7B2FF7"
-VIOLET_DEEP = "#5A1FD1"
-NIGHT = "#1B0E4A"             # the solid tone behind popups and dialogs
-BG = VIOLET_DEEP
-PANEL = ft.Colors.with_opacity(0.58, "#140A3A")
-CARD = ft.Colors.with_opacity(0.10, "#FFFFFF")
-FIELD = ft.Colors.with_opacity(0.14, "#FFFFFF")
-HOVER = ft.Colors.with_opacity(0.20, "#FFFFFF")
-OUTLINE = ft.Colors.with_opacity(0.20, "#FFFFFF")
-BORDER = ft.Colors.with_opacity(0.24, "#FFFFFF")
-EDGE = ft.Colors.with_opacity(0.32, "#FFFFFF")
-DIVIDER = ft.Colors.with_opacity(0.16, "#FFFFFF")
-TEXT = "#FFFFFF"
-SOFT = "#F0EBFF"
-MUTED = "#CDC2F2"
-FAINT = "#A496D6"
-ACCENT = ORANGE_DEEP          # the menu's highlight
+# poke-app: the look of Pokemon HOME. A pale mint-and-sky backdrop, white rounded cards floating on soft shadows,
+# HOME's teal as the one accent, its mint-to-sky gradient on the big tiles and a bright mint cursor on the selection.
+MINT = "#2ED3A5"
+SKY = "#1DA3DB"
+GRADIENT = (MINT, SKY)
+TEAL = "#0C9A8B"
+NAVY = "#1F2E44"
+CURSOR = "#16D2B4"            # the selection frame, as HOME draws it around the chosen button
+BG = "#E8F3F4"
+NIGHT = "#FFFFFF"             # upstream views' popup and dialog surface: white here
+PANEL = "#FFFFFF"
+CARD = "#F1F5F8"
+FIELD = "#EBF1F5"
+HOVER = "#E2EAEF"
+OUTLINE = "#E1E8EE"
+BORDER = "#D3DDE5"
+EDGE = "#C1CDD8"
+DIVIDER = "#E4EBF0"
+TEXT = "#1E2B3C"
+SOFT = "#394859"
+MUTED = "#66768A"
+FAINT = "#98A6B5"
+ACCENT = TEAL
 BLUE = ACCENT                 # upstream's name for the accent: selection, focus, the filled button
-INFO = "#62CBFF"              # running and in-progress states
-RED = "#FF7A7A"               # errors and Stop, readable on violet
-GREEN = "#3DFFA0"
-AMBER = "#FFC54D"
+INFO = "#1C8BD2"              # running and in-progress states
+RED = "#D3303F"               # errors and Stop
+GREEN = "#0B9B6A"
+AMBER = "#D27406"
 INK = "#FFFFFF"               # text on the accent
-HIGHLIGHT = "#FFFFFF"         # the selected menu entry: white, with violet text
-HIGHLIGHT_TEXT = "#2A1470"
-SHADOW = ft.BoxShadow(blur_radius=30, spread_radius=0, offset=ft.Offset(0, 10),
-                      color=ft.Colors.with_opacity(0.28, "#0B0420"))
-SELECTED = ft.Colors.with_opacity(0.18, "#FFFFFF")
-FONT = "Rubik"
-BRAND_BLUE = ("#4FD9F5", "#4E61FC")   # the logo's two gradients (assets/logo.svg)
-BRAND_RED = ("#FAA555", "#FD474D")   # upstream's logo gradients, used by its newer views
+HIGHLIGHT = NAVY              # the controller face buttons in the hints: navy, with a white letter
+HIGHLIGHT_TEXT = "#FFFFFF"
+SHADOW = ft.BoxShadow(blur_radius=26, spread_radius=0, offset=ft.Offset(0, 8),
+                      color=ft.Colors.with_opacity(0.10, "#16384A"))
+GLOW = ft.BoxShadow(blur_radius=22, spread_radius=2, offset=ft.Offset(0, 0),
+                    color=ft.Colors.with_opacity(0.55, CURSOR))
+SELECTED = ft.Colors.with_opacity(0.12, ACCENT)
+FONT = "Nunito"
+BRAND_BLUE = ("#4FD9F5", "#4E61FC")   # upstream's logo gradients, used by its newer views
+BRAND_RED = ("#FAA555", "#FD474D")
 MONO = "monospace"
 CONTROL_HEIGHT = 36
 CONTROL_PADDING = ft.Padding(14, 8, 14, 8)
@@ -48,22 +52,22 @@ SESSION_WIDTH = 360
 
 
 def tint(alpha: float, color: str = TEXT) -> str:
-    """A see-through layer of `color`: hovers and hairlines over the violet panels."""
+    """A see-through layer of `color`: hovers and hairlines on the white cards."""
     return ft.Colors.with_opacity(alpha, color)
 
 
 def app_theme() -> ft.Theme:
     return ft.Theme(
-        color_scheme_seed=VIOLET,
+        color_scheme_seed=TEAL,
         font_family=FONT,
-        color_scheme=ft.ColorScheme(primary=ACCENT, on_primary=INK, secondary=INFO, surface=NIGHT,
+        color_scheme=ft.ColorScheme(primary=ACCENT, on_primary=INK, secondary=INFO, surface=PANEL,
                                     on_surface=TEXT, error=RED, outline=BORDER,
-                                    surface_container_highest=NIGHT, on_surface_variant=MUTED),
+                                    surface_container_highest=FIELD, on_surface_variant=MUTED),
         divider_color=DIVIDER,
         card_theme=ft.CardTheme(margin=0),
-        scrollbar_theme=ft.ScrollbarTheme(thickness=6, radius=3, thumb_color=tint(0.30)),
-        tooltip_theme=ft.TooltipTheme(decoration=ft.BoxDecoration(bgcolor=NIGHT, border_radius=10),
-                                      text_style=ft.TextStyle(color=TEXT, size=12)),
+        scrollbar_theme=ft.ScrollbarTheme(thickness=6, radius=3, thumb_color=tint(0.20)),
+        tooltip_theme=ft.TooltipTheme(decoration=ft.BoxDecoration(bgcolor=NAVY, border_radius=10),
+                                      text_style=ft.TextStyle(color=INK, size=12)),
     )
 
 
@@ -73,24 +77,37 @@ def text(value: str, size: float = 13, color: str = TEXT, weight=None, **kwargs)
 
 
 def backdrop(content: ft.Control) -> ft.Container:
-    """The window behind everything: orange and violet split on a slant, soft stripes, a faint Poke Ball
-    ring in the corner, like a modern game's pause menu."""
+    """The window behind everything, as in HOME: a pale mint-to-sky wash, two soft glows and a faint Poke Ball
+    ring in the corner."""
+    def glow(color: str, size: float, **where) -> ft.Container:
+        return ft.Container(width=size, height=size, border_radius=size / 2, **where,
+                            gradient=ft.RadialGradient(colors=[ft.Colors.with_opacity(0.38, color),
+                                                               ft.Colors.with_opacity(0.0, color)]))
     return ft.Container(ft.Stack([
-        ft.Container(left=0, top=0, right=0, bottom=0,
-                     image=ft.DecorationImage(src="stripes.png", repeat=ft.ImageRepeat.REPEAT, scale=1.6,
-                                              alignment=ft.Alignment.TOP_LEFT)),
-        ft.Container(ft.Image(src="ring.svg", width=820, height=820, opacity=0.09), right=-210, bottom=-260),
+        glow(MINT, 900, right=-320, top=-380),
+        glow(SKY, 820, left=-360, bottom=-420),
+        ft.Container(ft.Image(src="ring_teal.svg", width=760, height=760, opacity=0.06), right=-230, bottom=-250),
         ft.Container(content, left=0, top=0, right=0, bottom=0),
     ], expand=True), expand=True, bgcolor=BG,
-        gradient=ft.LinearGradient(begin=ft.Alignment(-1, -0.6), end=ft.Alignment(1, 0.6),
-                                   colors=[ORANGE, ORANGE_DEEP, VIOLET, VIOLET_DEEP],
-                                   stops=[0.0, 0.37, 0.371, 1.0]))
+        gradient=ft.LinearGradient(begin=ft.Alignment.TOP_LEFT, end=ft.Alignment.BOTTOM_RIGHT,
+                                   colors=["#F5FBFB", "#E6F4F3", "#E3EFF8"]))
 
 
 def glass(content: ft.Control, radius: float = 26, **kwargs) -> ft.Container:
-    """A translucent dark-violet panel floating over the backdrop: cards, tools and the session sit on these."""
+    """A white card floating on a soft shadow: tools, the session and the side panels sit on these."""
     return ft.Container(content, bgcolor=PANEL, border_radius=radius, clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
-                        border=ft.Border.all(2, OUTLINE), shadow=SHADOW, blur=ft.Blur(8, 8), **kwargs)
+                        border=ft.Border.all(1, OUTLINE), shadow=SHADOW, **kwargs)
+
+
+def gradient(begin=ft.Alignment.TOP_LEFT, end=ft.Alignment.BOTTOM_RIGHT) -> ft.LinearGradient:
+    """HOME's mint-to-sky gradient: the big tile, the trainer card's band and the icon badges."""
+    return ft.LinearGradient(begin=begin, end=end, colors=list(GRADIENT))
+
+
+def badge_icon(name: str, size: float = 52, icon_size: int = 26) -> ft.Container:
+    """A round gradient badge holding a white icon, as HOME marks its menu buttons."""
+    return ft.Container(pixel_icon(name, size=icon_size, color=INK), width=size, height=size,
+                        border_radius=size / 2, alignment=ft.Alignment.CENTER, gradient=gradient())
 
 
 def surface(content: ft.Control, *, bgcolor: str = CARD, radius: float = 18, **kwargs) -> ft.Container:
@@ -163,15 +180,14 @@ def card(title: str, body: ft.Control | None = None, description: str = "",
         rows.append(text(description, 12, MUTED))
     if body:
         rows.append(body)
-    # A dark translucent card: it reads the same over the orange and the violet halves of the backdrop.
     return surface(ft.Container(ft.Column(rows, spacing=10, tight=True), padding=18), bgcolor=PANEL,
-                   border=ft.Border.all(2, OUTLINE), radius=22)
+                   border=ft.Border.all(1, OUTLINE), radius=22, shadow=SHADOW)
 
 
 def dialog(**kwargs) -> ft.AlertDialog:
-    return ft.AlertDialog(bgcolor=NIGHT, elevation=24,
-                          shape=ft.RoundedRectangleBorder(radius=26, side=ft.BorderSide(2, OUTLINE)),
-                          barrier_color=ft.Colors.with_opacity(0.55, "#0B0420"), **kwargs)
+    return ft.AlertDialog(bgcolor=PANEL, elevation=24,
+                          shape=ft.RoundedRectangleBorder(radius=26, side=ft.BorderSide(1, OUTLINE)),
+                          barrier_color=ft.Colors.with_opacity(0.35, NAVY), **kwargs)
 
 
 def _border() -> dict:
@@ -219,7 +235,7 @@ def dropdown(options: list[tuple[str, str]], value: str | None, on_select=None, 
                        text_size=13, expand=True, height=CONTROL_HEIGHT, content_padding=CONTROL_PADDING,
                        trailing_icon=pixel_icon("chevron-down", color=MUTED),
                        selected_trailing_icon=pixel_icon("chevron-up", color=ACCENT),
-                       menu_style=ft.MenuStyle(bgcolor=NIGHT, shape=ft.RoundedRectangleBorder(radius=14)),
+                       menu_style=ft.MenuStyle(bgcolor=PANEL, shape=ft.RoundedRectangleBorder(radius=14)),
                        **kwargs)
 
 
@@ -308,7 +324,7 @@ def chip(label: str, icon: str | None = None, color: str = MUTED) -> ft.Containe
     row.append(text(label, 12, SOFT, weight=ft.FontWeight.W_500))
     return ft.Container(ft.Row(row, spacing=6, tight=True, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                         padding=ft.Padding(10, 3, 10, 3), border_radius=999,
-                        bgcolor=ft.Colors.with_opacity(0.06, "#FFFFFF"))
+                        bgcolor=tint(0.05))
 
 
 def segmented(options: list[tuple[str, str, str]], value: str, on_change, wrap: bool = False) -> ft.Row:

@@ -11,7 +11,9 @@ from pokeldn.app.paths import ROOT
 
 DOCS = os.path.join(ROOT, "docs")
 GUIDE = os.path.join(ROOT, "gui", "guide.md")
-SITE = "https://decryptu.github.io/pokeldn/"
+REPO = "https://github.com/erikmolinag/pokeldn/blob/poke-app/"
+SITE = REPO.replace("/blob/", "/tree/") + "docs"
+SHOWN = ("frlg", "hardware")   # poke-app is FireRed and LeafGreen only: their pages and the hardware's
 
 
 @dataclass
@@ -50,7 +52,7 @@ def pages() -> list[Page]:
 class DocsView:
     def __init__(self, app):
         self.app = app
-        self.tree = pages()
+        self.tree = [p for p in pages() if p.file.startswith(SHOWN)]
         self.file = "guide"
         self.open_parents: set[str] = set()
         self.nav = ft.ListView(spacing=1, padding=8, expand=True)
@@ -61,7 +63,7 @@ class DocsView:
             t.panel(ft.Column([
                 t.panel_header(tr("Docs"), t.icon_button("external-link",
                                                          lambda e: self.app.page.run_task(self.app.open_url, SITE),
-                                                         tr("Open the docs website"))),
+                                                         tr("Open on GitHub"))),
                 t.fade(self.nav),
             ], spacing=0, expand=True), width=t.SIDEBAR_WIDTH),
             t.surface(t.fade(self.scroll), radius=20, expand=True),
@@ -128,4 +130,4 @@ class DocsView:
         if name.endswith(".md") and os.path.exists(os.path.join(DOCS, name)):
             self.show(name)
         elif target:
-            await self.app.open_url(f"https://github.com/Decryptu/pokeldn/blob/main/{target.lstrip('./')}")
+            await self.app.open_url(f"{REPO}{target.lstrip('./')}")

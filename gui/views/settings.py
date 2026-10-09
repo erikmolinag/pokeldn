@@ -14,9 +14,7 @@ from pokeldn.app.settings import LANGUAGES
 from pokeldn.app import storage
 from gui.views.widgets import PathField, open_folder
 
-LINKS = (("Docs", "https://decryptu.github.io/pokeldn/"),
-         ("GitHub", "https://github.com/Decryptu/pokeldn"),
-         ("Discord", "https://discord.gg/PyvaVYnpXC"))
+LINKS = (("GitHub", "https://github.com/erikmolinag/pokeldn"),)
 
 
 class SettingsView:
@@ -156,9 +154,10 @@ class SettingsView:
                                   tr("Show advanced settings"), self._toggle_advanced)]),
             *(advanced if self.show_advanced else []),
             t.card(tr("About this app"), ft.Row([link(label, url) for label, url in LINKS], spacing=4),
-                   tr("A Pokemon-styled edition of pokeldn {version} by Decryptu, for FireRed and LeafGreen. "
-                      "pokeldn is AGPLv3; Pokemon are checked with PKHeX.Core (GPLv3). Not affiliated with "
-                      "Nintendo, Game Freak or The Pokemon Company.", version=__version__)),
+                   tr("pokeldn {version}, a fork by {name} for FireRed and LeafGreen. Free software under the "
+                      "AGPL-3.0 license, with no warranty; the source code is on GitHub. Pokemon are checked with "
+                      "PKHeX.Core (GPLv3). Not affiliated with Nintendo, Game Freak or The Pokemon Company.",
+                      version=__version__, name="erks")),
         ]
 
     def _language(self, e) -> None:

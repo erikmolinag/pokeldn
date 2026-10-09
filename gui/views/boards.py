@@ -294,7 +294,7 @@ class BoardView:
                 ft.Column([t.text(self.name_of(f), 20, weight=ft.FontWeight.W_600),
                            t.text(subtitle or tr("pokeldn board"), 13, t.MUTED)], spacing=2, expand=True),
             ], spacing=14),
-            ft.Divider(height=1, color=ft.Colors.with_opacity(0.08, "#FFFFFF")),
+            ft.Divider(height=1, color=t.DIVIDER),
             status_row,
         ]
         if self.installing or self.progress_text.value:
@@ -322,7 +322,7 @@ class BoardView:
                 trailing,
             ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 padding=ft.Padding(12, 10, 12, 10), border_radius=12,
-                bgcolor=ft.Colors.with_opacity(0.04, "#FFFFFF") if installed else None))
+                bgcolor=t.CARD if installed else None))
         footer = [t.link_button(tr("Install from a file..."), self._choose_file)]
         if not all(self.available(fw) for fw in board.FIRMWARES):
             footer.insert(0, t.secondary_button(tr("Downloading...") if self.downloading else

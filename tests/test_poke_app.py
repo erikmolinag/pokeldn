@@ -109,3 +109,28 @@ def test_the_identify_placeholder_builds_through_pkhex():
     spec.loader.exec_module(host)
     info = pokemon.SERVICE.check("frlg", host.identify_placeholder())
     assert info["legal"] and info["species_id"] == host.PLACEHOLDER_SPECIES
+
+
+def test_the_menu_arrows_reach_every_tile_and_lead_back():
+    """HOME's tile grid: from any tile the arrows reach every other one, and every move has a way back."""
+    from gui.views.menu import ENTRIES, MOVES
+    back = {"Arrow Up": "Arrow Down", "Arrow Down": "Arrow Up", "Arrow Left": "Arrow Right",
+            "Arrow Right": "Arrow Left"}
+    assert set(MOVES) == set(range(len(ENTRIES)))
+    for start in MOVES:
+        seen, todo = {start}, [start]
+        while todo:
+            for target in MOVES[todo.pop()].values():
+                if target not in seen:
+                    seen.add(target)
+                    todo.append(target)
+        assert seen == set(MOVES)
+    for moves in MOVES.values():
+        for key, target in moves.items():
+            assert back[key] in MOVES[target]
+
+
+def test_the_app_links_only_to_the_fork():
+    from gui.views import docs, settings as settings_view
+    urls = [url for _, url in settings_view.LINKS] + [docs.REPO, docs.SITE]
+    assert all(url.startswith("https://github.com/erikmolinag/pokeldn") for url in urls)

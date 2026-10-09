@@ -293,12 +293,12 @@ ES = {
         "Los sprites vienen de PokeAPI y se guardan en esta computadora después de la primera descarga. La app "
         "funciona sin ellos.",
     "About this app": "Acerca de esta app",
-    "A Pokemon-styled edition of pokeldn {version} by Decryptu, for FireRed and LeafGreen. pokeldn is AGPLv3; "
-    "Pokemon are checked with PKHeX.Core (GPLv3). Not affiliated with Nintendo, Game Freak or The Pokemon "
-    "Company.":
-        "Una edición con estilo Pokémon de pokeldn {version}, de Decryptu, para Rojo Fuego y Verde Hoja. pokeldn "
-        "es AGPLv3; los Pokémon se revisan con PKHeX.Core (GPLv3). Sin relación con Nintendo, Game Freak ni The "
-        "Pokémon Company.",
+    "pokeldn {version}, a fork by {name} for FireRed and LeafGreen. Free software under the AGPL-3.0 license, "
+    "with no warranty; the source code is on GitHub. Pokemon are checked with PKHeX.Core (GPLv3). Not affiliated "
+    "with Nintendo, Game Freak or The Pokemon Company.":
+        "pokeldn {version}, fork de {name} para Rojo Fuego y Verde Hoja. Software libre bajo la licencia "
+        "AGPL-3.0, sin garantía; el código está en GitHub. Los Pokémon se revisan con PKHeX.Core (GPLv3). Sin "
+        "relación con Nintendo, Game Freak ni The Pokémon Company.",
     "Checking local files...": "Revisando archivos locales...",
     "Clearing local files...": "Borrando archivos locales...",
     "Clear local files": "Borrar archivos locales",
@@ -329,7 +329,7 @@ ES = {
         "Pokémon generados sin usar. Guarda antes los registros que necesites para un reporte. Tus Pokémon "
         "recibidos, ofertas elegidas, claves, firmware y ajustes se conservan.",
     "GitHub": "GitHub",
-    "Discord": "Discord",
+    "Open on GitHub": "Abrir en GitHub",
     "parts": "partes",
 
     # the game-style menu (gui/views/menu.py, screen.py, main.py)
@@ -374,6 +374,13 @@ ES = {
     "Your console joins pokeldn, which meets your partner online":
         "Tu consola se une a pokeldn, que se encuentra con tu compañero por internet",
     "Trade (Online)": "Intercambio (en línea)",
+
+    # the HOME-style menu and top bar
+    "My trainer": "Mi entrenador",
+    "My save": "Mi partida",
+    "Bank": "Banco",
+    "Options": "Opciones",
+    "pokeldn · a fork by {name}": "pokeldn · fork de {name}",
 
     # the owner of built Pokemon
     "Built for your trainer: {name} · ID {tid}": "Se genera para tu entrenador: {name} · ID {tid}",
