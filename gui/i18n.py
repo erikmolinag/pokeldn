@@ -366,6 +366,14 @@ ES = {
         "Copia tu partida completa a esta computadora, o pon una de vuelta.",
     "Board, language, keys and the guide.": "Placa, idioma, claves y la guía.",
     "Trade them now": "Intercambiarlos ahora",
+    "BANK": "BANCO",
+    "Keep Pokemon between games": "Guarda Pokémon entre juegos",
+    "Keep Pokemon on this computer and send them back to a game.":
+        "Guarda Pokémon en esta computadora y mándalos de vuelta a un juego.",
+    "Control": "Control",
+    "Your console joins pokeldn, which meets your partner online":
+        "Tu consola se une a pokeldn, que se encuentra con tu compañero por internet",
+    "Trade (Online)": "Intercambio (en línea)",
 
     # the owner of built Pokemon
     "Built for your trainer: {name} · ID {tid}": "Se genera para tu entrenador: {name} · ID {tid}",

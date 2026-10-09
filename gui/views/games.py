@@ -687,7 +687,8 @@ class SessionPanel:
             for n, (species, shiny, summary) in enumerate(shown, start=1):
                 sprite = Sprite(self.app, species, shiny, size=MINI)
                 traded = n <= self.traded
-                sprite.frame.tooltip = f"Trade {n}{' (done)' if traded else ''}: {summary}"
+                sprite.frame.tooltip = (tr("Trade {n} (done): {summary}", n=n, summary=summary) if traded else
+                                        tr("Trade {n}: {summary}", n=n, summary=summary))
                 tiles.append(ft.Stack([sprite.control, ft.Container(
                     t.pixel_icon("checkbox-on", color=t.GREEN), right=0, bottom=0, visible=traded)]))
             progress = (tr("{done} of {total} traded", done=min(self.traded, len(shown)), total=len(shown))
@@ -709,22 +710,23 @@ class SessionPanel:
     def show_partner(self, partner) -> None:
         """Who the online trade meets, what they offer and whether they confirmed."""
         self.partner_state = partner
-        looks = {"looking": ("refresh", t.BLUE, "Connecting to the relays"),
-                 "waiting": ("refresh", t.BLUE, "Looking for a partner"),
-                 "paired": ("user", t.GREEN, f"Trading with {partner.name}"),
-                 "lost": ("warning-diamond", t.RED, f"{partner.name or 'Your partner'} left")}
+        looks = {"looking": ("refresh", t.BLUE, tr("Connecting to the relays")),
+                 "waiting": ("refresh", t.BLUE, tr("Looking for a partner")),
+                 "paired": ("user", t.GREEN, tr("Trading with {name}", name=partner.name)),
+                 "lost": ("warning-diamond", t.RED, tr("{name} left", name=partner.name) if partner.name else
+                          tr("Your partner left"))}
         icon, color, title = looks[partner.state]
         if partner.state in ("looking", "waiting"):
             code = partner.code.removeprefix("code ")
-            detail = ("Anyone trading this game online without a code can be your partner."
-                      if partner.code == "no code" else f"Your partner enters the same code: {code}.")
+            detail = (tr("Anyone trading this game online without a code can be your partner.")
+                      if partner.code == "no code" else tr("Your partner enters the same code: {code}.", code=code))
         elif partner.state == "lost":
-            detail = "Back out of the trade on the console. Start again to find a partner."
+            detail = tr("Back out of the trade on the console. Start again to find a partner.")
         elif partner.offer:
-            detail = "They confirmed. Confirm on your console to trade." if partner.confirmed else \
-                "Waiting for them to confirm."
+            detail = tr("They confirmed. Confirm on your console to trade.") if partner.confirmed else \
+                tr("Waiting for them to confirm.")
         else:
-            detail = "Offer a Pokemon on your console; theirs appears here once they choose."
+            detail = tr("Offer a Pokemon on your console; theirs appears here once they choose.")
         rows = [ft.Row([t.pixel_icon(icon, color=color),
                         ft.Column([t.text(title, 13, weight=ft.FontWeight.W_600),
                                    t.text(detail, 12, t.MUTED)], spacing=1, expand=True)],
@@ -733,11 +735,11 @@ class SessionPanel:
             species, shiny, summary = partner.offer
             rows.append(pokemon_row(self.app, species, shiny, summary))
             if partner.flag:
-                rows.append(t.text(f"PKHeX flags it: {partner.flag}", 12, t.AMBER))
+                rows.append(t.text(tr("PKHeX flags it: {flag}", flag=partner.flag), 12, t.AMBER))
         if partner.note:
             rows.append(t.text(partner.note, 12, t.AMBER))
-        trailing = t.text(f"{partner.trades} traded", 12, t.GREEN) if partner.trades else None
-        self.partner.content = t.section("Partner", ft.Column(rows, spacing=10), trailing=trailing)
+        trailing = t.text(tr("{n} traded", n=partner.trades), 12, t.GREEN) if partner.trades else None
+        self.partner.content = t.section(tr("Partner"), ft.Column(rows, spacing=10), trailing=trailing)
         self.partner.visible = True
         self.partner.update()
 

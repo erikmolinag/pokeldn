@@ -1,6 +1,7 @@
 import flet as ft
 
 from gui import theme as t
+from gui.i18n import tr
 from gui.views.pokemon import NamePicker
 from pokeldn.sv.raid import REWARD_ROWS
 
@@ -13,7 +14,7 @@ class RewardPicker:
         self.app, self.game, self.on_change = app, game, on_change
         self.value = [dict(row) for row in value] if isinstance(value, (list, tuple)) else []
         self.rows = ft.Column(spacing=8)
-        self.add = t.secondary_button("Add reward", self._add, "plus")
+        self.add = t.secondary_button(tr("Add reward"), self._add, "plus")
         self.control = ft.Column([self.rows, self.add], spacing=10, tight=True)
         self._render(update=False)
 
@@ -23,7 +24,7 @@ class RewardPicker:
 
     def _quantity(self, event, index: int) -> None:
         text = event.control.value
-        event.control.error = None if text.isdigit() and 1 <= int(text) <= 999 else "1 to 999"
+        event.control.error = None if text.isdigit() and 1 <= int(text) <= 999 else tr("1 to 999")
         event.control.update()
         self._set(index, "quantity", text)
 
@@ -51,13 +52,13 @@ class RewardPicker:
                 ft.Container(t.text(str(index + 1), 11, t.BLUE, weight=ft.FontWeight.W_700), width=24, height=24,
                              margin=ft.Margin(0, 0, 0, 5), alignment=ft.Alignment.CENTER, border_radius=12,
                              bgcolor=ft.Colors.with_opacity(0.12, t.BLUE)),
-                ft.Column([t.text("Item", 11, t.MUTED), item], spacing=4, expand=True),
-                ft.Column([t.text("Quantity", 11, t.MUTED), quantity], spacing=4),
-                t.icon_button("close", lambda _e, n=index: self._remove(n), "Remove reward"),
+                ft.Column([t.text(tr("Item"), 11, t.MUTED), item], spacing=4, expand=True),
+                ft.Column([t.text(tr("Quantity"), 11, t.MUTED), quantity], spacing=4),
+                t.icon_button("close", lambda _e, n=index: self._remove(n), tr("Remove reward")),
             ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.END))
         if not rows:
             rows.append(ft.Row([t.pixel_icon("gift", color=t.FAINT),
-                                t.text("The raid's own rewards, shown with the raid above.", 12, t.MUTED)],
+                                t.text(tr("The raid's own rewards, shown with the raid above."), 12, t.MUTED)],
                                spacing=8))
         self.rows.controls = rows
         self.add.disabled = len(self.value) >= REWARD_ROWS

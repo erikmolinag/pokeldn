@@ -11,6 +11,7 @@ import flet as ft
 
 from gui import board
 from gui.app import NO_FIRMWARE, PORT_BUSY, PORT_DENIED
+from gui.i18n import tr
 from pokeldn.pad import service
 from pokeldn.app import runner
 from pokeldn.app.paths import SESSION
@@ -62,16 +63,16 @@ class BoardView:
         self.pad_checking = False
         self.list = ft.ListView(spacing=4, padding=8, expand=True)
         self.detail = ft.Column(spacing=t.GAP)
-        self.log = Log(app.page, "Checks and installs show their output here.")
+        self.log = Log(app.page, tr("Checks and installs show their output here."))
         self.progress = ft.ProgressBar(value=None, color=t.BLUE, bgcolor=t.FIELD, height=4, border_radius=2)
         self.progress_text = t.text("", 12, t.MUTED)
         self.control = ft.Row([
             t.panel(ft.Column([
-                t.panel_header("Boards", t.icon_button("refresh", lambda e: self.scan(), "Look again")),
+                t.panel_header(tr("Boards"), t.icon_button("refresh", lambda e: self.scan(), tr("Look again"))),
                 t.fade(self.list),
             ], spacing=0, expand=True), width=t.SIDEBAR_WIDTH),
             t.fade(ft.ListView([self.detail], padding=ft.Padding(0, 0, 0, 24), expand=True)),
-            t.panel(ft.Column([t.panel_header("Activity"),
+            t.panel(ft.Column([t.panel_header(tr("Activity")),
                                ft.Container(self.log.control, padding=16, expand=True)],
                               spacing=0, expand=True), width=t.SESSION_WIDTH),
         ], spacing=t.GAP, expand=True, vertical_alignment=ft.CrossAxisAlignment.STRETCH)
@@ -162,17 +163,17 @@ class BoardView:
     def name_of(self, f: Facts) -> str:
         if f.mac and (name := self.app.settings.board_names.get(f.mac)):
             return name
-        return f"{f.chip} board" if f.chip else "ESP32 board"
+        return tr("{chip} board", chip=f.chip) if f.chip else tr("ESP32 board")
 
     def line(self, f: Facts) -> str:
         """The firmware and its version, as the list and the header say it."""
         if f.state == "checking":
-            return "Checking..."
+            return tr("Checking...")
         if f.state in ("busy", "denied", "wrong-port"):
-            return "Needs attention"
+            return tr("Needs attention")
         if f.firmware is None:
-            return "No pokeldn firmware"
-        return f"{f.firmware.name} {f.version}".strip()
+            return tr("No pokeldn firmware")
+        return f"{tr(f.firmware.name)} {f.version}".strip()
 
     # The page
 
@@ -191,15 +192,15 @@ class BoardView:
                     t.text(self.name_of(f), 13, t.TEXT if active else t.SOFT, weight=ft.FontWeight.W_600),
                     t.text(self.line(f), 11, t.MUTED),
                 ], spacing=1, expand=True),
-                t.badge("In use", t.BLUE, "checkbox-on") if len(self.ports) > 1 and key == session_port else
+                t.badge(tr("In use"), t.BLUE, "checkbox-on") if len(self.ports) > 1 and key == session_port else
                 ft.Container(width=8, height=8, border_radius=4, bgcolor=dot),
             ], spacing=10), padding=ft.Padding(10, 8, 10, 8), border_radius=12,
                 bgcolor=t.SELECTED if active else None, on_click=lambda e, k=key: self._select(k)))
         if not rows:
             rows.append(ft.Container(ft.Column([
                 t.pixel_icon("usb", color=t.FAINT),
-                t.text("No board found", 13, t.MUTED, weight=ft.FontWeight.W_600),
-                t.text("Plug it into this computer with a data cable. It shows up here on its own.", 12,
+                t.text(tr("No board found"), 13, t.MUTED, weight=ft.FontWeight.W_600),
+                t.text(tr("Plug it into this computer with a data cable. It shows up here on its own."), 12,
                        t.FAINT, text_align=ft.TextAlign.CENTER),
             ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6), padding=24))
         self.list.controls = rows
@@ -224,8 +225,8 @@ class BoardView:
         status = self.app.board_status(self.ports)
         return t.surface(ft.Container(ft.Row([
             t.pixel_icon("usb", size=48, color=t.FAINT),
-            ft.Column([t.text(status.title, 17, weight=ft.FontWeight.W_600),
-                       t.text(status.detail, 13, t.MUTED)], spacing=2, expand=True),
+            ft.Column([t.text(tr(status.title), 17, weight=ft.FontWeight.W_600),
+                       t.text(tr(status.detail), 13, t.MUTED)], spacing=2, expand=True),
         ], spacing=14), padding=ft.Padding(18, 16, 18, 18)))
 
     def header(self, f: Facts) -> ft.Control:
@@ -235,47 +236,50 @@ class BoardView:
         busy = self.app.busy or bool(self.installing)
         action: list[ft.Control] = []
         if self.installing:
-            icon, color, title, detail = None, t.BLUE, f"Installing {board.FIRMWARE_BY_KIND[self.installing].name} firmware", \
-                "Keep the board plugged in. About a minute."
+            icon, color, title, detail = None, t.BLUE, tr(
+                "Installing {name} firmware", name=tr(board.FIRMWARE_BY_KIND[self.installing].name)), \
+                tr("Keep the board plugged in. About a minute.")
         elif f.state == "checking":
-            icon, color, title, detail = None, t.BLUE, "Checking the board", (
-                "Asking the board over Bluetooth for its firmware version." if f.key == CONTROLLER
-                else "Asking the board for its firmware.")
+            icon, color, title, detail = None, t.BLUE, tr("Checking the board"), (
+                tr("Asking the board over Bluetooth for its firmware version.") if f.key == CONTROLLER
+                else tr("Asking the board for its firmware."))
         elif f.state == "unknown":
-            icon, color, title, detail = "circle-info", t.AMBER, "Version unknown", f.detail
-            action.append(t.secondary_button("Check again", lambda e: self._check_pad(), "refresh",
+            icon, color, title, detail = "circle-info", t.AMBER, tr("Version unknown"), tr(f.detail)
+            action.append(t.secondary_button(tr("Check again"), lambda e: self._check_pad(), "refresh",
                                              disabled=busy or self.pad_checking))
         elif f.state == "none":
             radio = board.FIRMWARE_BY_KIND["radio"]
-            icon, color, title, detail = "warning-diamond", t.AMBER, "No pokeldn firmware", (
+            icon, color, title, detail = "warning-diamond", t.AMBER, tr("No pokeldn firmware"), tr(
                 "Install a firmware below. The Wireless firmware is the one every Games tool needs.")
-            action.append(t.button(f"Install {radio.name}", lambda e: self.confirm(radio), "download",
-                                   disabled=busy))
+            action.append(t.button(tr("Install {name}", name=tr(radio.name)), lambda e: self.confirm(radio),
+                                   "download", disabled=busy))
         elif f.state == "old":
-            icon, color, title, detail = "warning-diamond", t.AMBER, "Update required", (
+            icon, color, title, detail = "warning-diamond", t.AMBER, tr("Update required"), tr(
                 "This firmware speaks an older protocol than this app. Update it to use the board.")
-            action.append(t.button("Update", lambda e: self.install(f.kind), "download", disabled=busy))
+            action.append(t.button(tr("Update"), lambda e: self.install(f.kind), "download", disabled=busy))
         elif f.state in PROBLEMS:
             status = self.app.board_status(self.ports, f.key)
-            icon, color, title, detail = "warning-diamond", t.RED, status.title, status.detail
-            action.append(t.secondary_button("Check again", self._identify, "refresh", disabled=busy))
+            icon, color, title, detail = "warning-diamond", t.RED, tr(status.title), tr(status.detail)
+            action.append(t.secondary_button(tr("Check again"), self._identify, "refresh", disabled=busy))
         elif f.update:
-            icon, color, title, detail = "download", t.BLUE, f"Update available: {f.update}", (
-                f"{f.firmware.name} firmware {f.update} is included with this app. This board runs {f.version}.")
-            action.append(t.button("Update", lambda e: self.install(f.kind), "download", disabled=busy))
+            icon, color, title, detail = "download", t.BLUE, tr("Update available: {version}", version=f.update), tr(
+                "{name} firmware {version} is included with this app. This board runs {installed}.",
+                name=tr(f.firmware.name), version=f.update, installed=f.version)
+            action.append(t.button(tr("Update"), lambda e: self.install(f.kind), "download", disabled=busy))
         else:
-            icon, color, title, detail = "checkbox-on", t.GREEN, "Up to date", (
-                f"{f.firmware.name} firmware {f.version} is the newest this app includes." if f.version else
-                f"{f.firmware.name} firmware.")
+            icon, color, title, detail = "checkbox-on", t.GREEN, tr("Up to date"), (
+                tr("{name} firmware {version} is the newest this app includes.", name=tr(f.firmware.name),
+                   version=f.version) if f.version else
+                tr("{name} firmware.", name=tr(f.firmware.name)))
         if not self.installing and f.state == "ready":
             if f.kind == "radio":
                 several = len(self.ports) > 1
                 if several and f.key != self.app.radio_port(self.ports):
-                    action.append(t.secondary_button("Use for trades", self._use, "check"))
-                action.append(t.button("Go to Games", lambda e: self.app.navigate("games"), "gamepad",
+                    action.append(t.secondary_button(tr("Use for trades"), self._use, "check"))
+                action.append(t.button(tr("Go to Games"), lambda e: self.app.navigate("games"), "gamepad",
                                        filled=not f.update))
             elif f.kind == "pad":
-                action.append(t.button("Open Control", lambda e: self.app.navigate("controller"), "joystick",
+                action.append(t.button(tr("Open Control"), lambda e: self.app.navigate("controller"), "joystick",
                                        filled=not f.update))
         lead = (PixelActivity("Working") if icon is None else t.pixel_icon(icon, size=18, color=color))
         status_row = ft.Row([
@@ -288,7 +292,7 @@ class BoardView:
             ft.Row([
                 t.pixel_icon(f.firmware.icon if f.firmware else "cpu", size=48, color=t.BLUE),
                 ft.Column([t.text(self.name_of(f), 20, weight=ft.FontWeight.W_600),
-                           t.text(subtitle or "pokeldn board", 13, t.MUTED)], spacing=2, expand=True),
+                           t.text(subtitle or tr("pokeldn board"), 13, t.MUTED)], spacing=2, expand=True),
             ], spacing=14),
             ft.Divider(height=1, color=ft.Colors.with_opacity(0.08, "#FFFFFF")),
             status_row,
@@ -304,30 +308,32 @@ class BoardView:
             installed = fw.kind == f.kind and f.state in ("ready", "old")
             fits = not f.chip or f.chip in fw.chips
             if installed:
-                trailing = t.chip(f"Installed · {f.version}" if f.version else "Installed", "check", t.GREEN)
+                trailing = t.chip(tr("Installed · {version}", version=f.version) if f.version else tr("Installed"),
+                                  "check", t.GREEN)
             elif not fits:
-                trailing = t.text(f"Not available on {f.chip}", 12, t.FAINT)
+                trailing = t.text(tr("Not available on {chip}", chip=f.chip), 12, t.FAINT)
             else:
-                trailing = t.secondary_button("Install", lambda e, w=fw: self.confirm(w), "download",
+                trailing = t.secondary_button(tr("Install"), lambda e, w=fw: self.confirm(w), "download",
                                               disabled=busy or not self.available(fw))
             rows.append(ft.Container(ft.Row([
                 t.pixel_icon(fw.icon, size=24, color=t.BLUE if installed else t.MUTED),
-                ft.Column([t.text(fw.name, 14, weight=ft.FontWeight.W_600),
-                           t.text(fw.summary, 12, t.MUTED)], spacing=2, expand=True),
+                ft.Column([t.text(tr(fw.name), 14, weight=ft.FontWeight.W_600),
+                           t.text(tr(fw.summary), 12, t.MUTED)], spacing=2, expand=True),
                 trailing,
             ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 padding=ft.Padding(12, 10, 12, 10), border_radius=12,
                 bgcolor=ft.Colors.with_opacity(0.04, "#FFFFFF") if installed else None))
-        footer = [t.link_button("Install from a file...", self._choose_file)]
+        footer = [t.link_button(tr("Install from a file..."), self._choose_file)]
         if not all(self.available(fw) for fw in board.FIRMWARES):
-            footer.insert(0, t.secondary_button("Downloading..." if self.downloading else "Download the firmware",
+            footer.insert(0, t.secondary_button(tr("Downloading...") if self.downloading else
+                                                tr("Download the firmware"),
                                                 self._download, "download", disabled=self.downloading))
-            rows.append(t.text("This copy of the app has no firmware images (a copy run from source). Download "
-                               "the released ones; no ESP-IDF needed.", 12, t.AMBER))
+            rows.append(t.text(tr("This copy of the app has no firmware images (a copy run from source). Download "
+                                  "the released ones; no ESP-IDF needed."), 12, t.AMBER))
         rows.append(ft.Row(footer, spacing=8))
-        return drop.target(t.card("Firmware", ft.Column(rows, spacing=4),
-                                  "A board runs one firmware at a time. Switching takes about a minute, and you "
-                                  "can switch back whenever you like."), self._dropped)
+        return drop.target(t.card(tr("Firmware"), ft.Column(rows, spacing=4),
+                                  tr("A board runs one firmware at a time. Switching takes about a minute, and you "
+                                     "can switch back whenever you like.")), self._dropped)
 
     def about_card(self, f: Facts) -> ft.Control:
         def info(label, value):
@@ -335,22 +341,22 @@ class BoardView:
                            value if isinstance(value, ft.Control) else t.text(value, 13)],
                           vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
-        rows = [info("Chip", f.chip or "Unknown"),
-                info("Firmware", f"{f.firmware.name} {f.version}".strip() if f.firmware else "None")]
+        rows = [info(tr("Chip"), f.chip or tr("Unknown")),
+                info(tr("Firmware"), f"{tr(f.firmware.name)} {f.version}".strip() if f.firmware else tr("None"))]
         if f.key == CONTROLLER:
-            rows.append(info("Connection", "USB to this computer, as a controller; Bluetooth to this app"))
+            rows.append(info(tr("Connection"), tr("USB to this computer, as a controller; Bluetooth to this app")))
         elif f.port:
-            rows += [info("Connection", f"USB serial, {f.port.bridge}"),
-                     info("Port", t.text(f.port.device, 13, font_family=t.MONO))]
+            rows += [info(tr("Connection"), tr("USB serial, {bridge}", bridge=f.port.bridge)),
+                     info(tr("Port"), t.text(f.port.device, 13, font_family=t.MONO))]
         if f.mac:
-            rows.append(info("Wi-Fi MAC", t.text(f.mac, 13, font_family=t.MONO)))
-            name = t.field(value=self.app.settings.board_names.get(f.mac, ""), hint="Living room, spare...",
+            rows.append(info(tr("Wi-Fi MAC"), t.text(f.mac, 13, font_family=t.MONO)))
+            name = t.field(value=self.app.settings.board_names.get(f.mac, ""), hint=tr("Living room, spare..."),
                            width=220, on_submit=lambda e: self._rename(e.control, f.mac))
-            rows.append(info("Name", ft.Row([name, t.icon_button("check", lambda e: self._rename(name, f.mac),
-                                                                 "Save the name")], spacing=4)))
-            rows.append(ft.Row([t.secondary_button("Blink the LED", self._blink, "lightbulb",
+            rows.append(info(tr("Name"), ft.Row([name, t.icon_button("check", lambda e: self._rename(name, f.mac),
+                                                                     tr("Save the name"))], spacing=4)))
+            rows.append(ft.Row([t.secondary_button(tr("Blink the LED"), self._blink, "lightbulb",
                                                    disabled=self.app.busy)]))
-        return t.card("About this board", ft.Column(rows, spacing=10))
+        return t.card(tr("About this board"), ft.Column(rows, spacing=10))
 
     def _rename(self, field, mac: str) -> None:
         names = self.app.settings.board_names
@@ -406,7 +412,7 @@ class BoardView:
         except (OSError, service.ServiceError) as error:
             self.pad = None
             self.pad_error = (BLUETOOTH_REFUSED if any(refused) else
-                              f"The board did not answer over Bluetooth ({error}). Is Bluetooth on?")
+                              tr("The board did not answer over Bluetooth ({error}). Is Bluetooth on?", error=error))
         self.pad_checking = False
         self.app.ui(self._checked)
 
@@ -417,34 +423,34 @@ class BoardView:
 
     def confirm(self, fw: board.Firmware, image: str = "") -> None:
         f = self.facts(self.selected)
-        lines = [fw.summary]
+        lines = [tr(fw.summary)]
         if f.firmware and f.firmware.kind != fw.kind and f.state == "ready":
-            lines.append(f"It replaces the {f.firmware.name} firmware: the board stops working as "
-                         f"{f.firmware.role} until you install {f.firmware.name} again.")
-        lines.append("Keep the board plugged into this computer. It takes about a minute.")
+            lines.append(tr("It replaces the {name} firmware: the board stops working as {role} until you install "
+                            "{name} again.", name=tr(f.firmware.name), role=tr(f.firmware.role)))
+        lines.append(tr("Keep the board plugged into this computer. It takes about a minute."))
         if image:
-            lines.append(f"From the file {os.path.basename(image)}.")
+            lines.append(tr("From the file {name}.", name=os.path.basename(image)))
 
         def go(e):
             self.app.page.pop_dialog()
             self.install(fw.kind, image)
 
         self.app.page.show_dialog(t.dialog(
-            title=t.text(f"Install {fw.name} firmware?", 17, weight=ft.FontWeight.W_600),
+            title=t.text(tr("Install {name} firmware?", name=tr(fw.name)), 17, weight=ft.FontWeight.W_600),
             content=ft.Column([t.text(line, 13, t.MUTED) for line in lines], tight=True, spacing=8, width=420),
-            actions=[t.secondary_button("Cancel", lambda e: self.app.page.pop_dialog()),
-                     t.button("Install", go, "download")]))
+            actions=[t.secondary_button(tr("Cancel"), lambda e: self.app.page.pop_dialog()),
+                     t.button(tr("Install"), go, "download")]))
 
     def install(self, kind: str, image: str = "") -> None:
         if self.app.busy or self.installing:
             return
         self.installing = kind
         self.progress.value = None
-        self.progress_text.value, self.progress_text.color = "Starting...", t.MUTED
+        self.progress_text.value, self.progress_text.color = tr("Starting..."), t.MUTED
         self.log.clear()
         if self.selected == CONTROLLER:
             self.log.add("[app] Asking the board over Bluetooth to restart for installing.")
-            self.progress_text.value = "Asking the board to restart for installing..."
+            self.progress_text.value = tr("Asking the board to restart for installing...")
             threading.Thread(target=self._loader_work, args=(image,), daemon=True).start()
         else:   # a serial port: esptool resets the chip into its loader
             self._flash(kind, image)
@@ -465,10 +471,13 @@ class BoardView:
             finally:
                 client.close()
         except (OSError, service.ServiceError) as error:
-            self._failed(BLUETOOTH_REFUSED if any(refused) else f"The board did not answer over Bluetooth "
-                                                                 f"({error}).")
+            if any(refused):
+                self._failed(BLUETOOTH_REFUSED)
+            else:
+                self._failed(f"The board did not answer over Bluetooth ({error}).",
+                             tr("The board did not answer over Bluetooth ({error}).", error=error))
             return
-        self.app.ui(lambda: setattr(self.progress_text, "value", "Waiting for the board to restart...")
+        self.app.ui(lambda: setattr(self.progress_text, "value", tr("Waiting for the board to restart..."))
                     or self.progress_text.update())
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
@@ -493,7 +502,7 @@ class BoardView:
         if image:
             args += ["--firmware", image]
         self.log.add(f"[app] Installing {board.FIRMWARE_BY_KIND[kind].name} firmware on {self.selected}.")
-        self.progress_text.value = "Connecting..."
+        self.progress_text.value = tr("Connecting...")
         env = dict(os.environ, NO_COLOR="1", PYTHONUNBUFFERED="1")
         env.pop("POKELDN_RADIO", None)
         self.app.process_label = "flash"
@@ -509,7 +518,7 @@ class BoardView:
 
             def show():
                 self.progress.value = value
-                self.progress_text.value = f"Writing {value:.0%}"
+                self.progress_text.value = tr("Writing {percent}", percent=f"{value:.0%}")
                 self.progress.update()
                 self.progress_text.update()
             self.app.ui(show)
@@ -526,8 +535,8 @@ class BoardView:
             self.progress.value = 1
             self.progress_text.color = t.GREEN
             self.progress_text.value = (
-                "Installed. Plug the board into the Switch's USB-C port and open Control." if kind == "pad"
-                else "Installed. Checking the board...")
+                tr("Installed. Plug the board into the Switch's USB-C port and open Control.") if kind == "pad"
+                else tr("Installed. Checking the board..."))
             self.pad, self.pad_error = None, ""
             self.render()
             self.control.update()
@@ -539,15 +548,17 @@ class BoardView:
         self.selected = "" if self.selected not in [p.device for p in board.ports()] else self.selected
         self.scan()
 
-    def _failed(self, why: str) -> None:
+    def _failed(self, why: str, shown: str = "") -> None:
+        """`why` goes to the log in English; `shown`, when given, is its translation for the page."""
         def show():
             self.installing = ""
             self.log.add(f"[app] {why}")
             self.progress.value = 0
             self.progress_text.color = t.RED
-            self.progress_text.value = (
-                f"{why} Unplug the board, hold its BOOT button while plugging it back in, let go, then choose "
-                "Install again on the board that appears. On a board with two USB ports, use the one marked USB.")
+            self.progress_text.value = tr(
+                "{why} Unplug the board, hold its BOOT button while plugging it back in, let go, then choose "
+                "Install again on the board that appears. On a board with two USB ports, use the one marked USB.",
+                why=shown or tr(why))
             self.render()
             self.control.update()
         self.app.ui(show)
@@ -594,24 +605,24 @@ class BoardView:
             return t.secondary_button(label, lambda e: self.app.page.run_task(self.app.open_url, url),
                                       "external-link")
 
-        lines = [t.text("Try another cable or USB port. Many cables only charge.", 13)]
+        lines = [t.text(tr("Try another cable or USB port. Many cables only charge."), 13)]
         if sys.platform == "win32":
             lines += [
-                t.text("Windows needs the driver for the board's USB chip, printed on the chip next to the "
-                       "USB socket (CP2102 or CH340):", 13),
-                ft.Row([link("CP210x driver", board.DRIVERS["Silicon Labs CP210x"]),
-                        link("CH340 driver", board.DRIVERS["WCH CH340"])], spacing=6, wrap=True),
-                t.text(f"CP210x: {board.DRIVER_STEPS['Silicon Labs CP210x']}", 13, t.MUTED),
-                t.text(f"CH340: {board.DRIVER_STEPS['WCH CH340']}", 13, t.MUTED)]
+                t.text(tr("Windows needs the driver for the board's USB chip, printed on the chip next to the "
+                          "USB socket (CP2102 or CH340):"), 13),
+                ft.Row([link(tr("CP210x driver"), board.DRIVERS["Silicon Labs CP210x"]),
+                        link(tr("CH340 driver"), board.DRIVERS["WCH CH340"])], spacing=6, wrap=True),
+                t.text(f"CP210x: {tr(board.DRIVER_STEPS['Silicon Labs CP210x'])}", 13, t.MUTED),
+                t.text(f"CH340: {tr(board.DRIVER_STEPS['WCH CH340'])}", 13, t.MUTED)]
         elif sys.platform.startswith("linux"):
             lines += [
-                t.text("Allow serial ports, then log out and back in:", 13),
+                t.text(tr("Allow serial ports, then log out and back in:"), 13),
                 CodeBlock(self.app, "sudo usermod -aG dialout $USER").control,
-                t.text("Arch and its derivatives name the group uucp instead of dialout.", 13, t.MUTED)]
+                t.text(tr("Arch and its derivatives name the group uucp instead of dialout."), 13, t.MUTED)]
         lines += [
-            t.text("Use a classic ESP32 (ESP32-D0WD, WROOM-32E), or an ESP32-S3, C3 or C6 through its native USB "
-                   "port, the one marked USB. S2 boards are not supported.", 13, t.MUTED),
-            t.text("An install stuck on Connecting: hold the board's BOOT button until writing starts.", 13,
+            t.text(tr("Use a classic ESP32 (ESP32-D0WD, WROOM-32E), or an ESP32-S3, C3 or C6 through its native USB "
+                      "port, the one marked USB. S2 boards are not supported."), 13, t.MUTED),
+            t.text(tr("An install stuck on Connecting: hold the board's BOOT button until writing starts."), 13,
                    t.MUTED),
-            t.text("A controller board is listed only while it is plugged into this computer.", 13, t.MUTED)]
-        return t.card("Board not listed, or not answering?", ft.Column(lines, spacing=8))
+            t.text(tr("A controller board is listed only while it is plugged into this computer."), 13, t.MUTED)]
+        return t.card(tr("Board not listed, or not answering?"), ft.Column(lines, spacing=8))

@@ -16,10 +16,11 @@ ENTRIES = (
     ("team", "pokeball", "POKEMON", "Build Pokemon for your save"),
     ("trainer", "trainer", "MY TRAINER", "Read your TID and SID"),
     ("save", "save", "MY SAVE", "Back up and restore"),
+    ("bank", "package", "BANK", "Keep Pokemon between games"),
     ("options", "gear", "OPTIONS", "Board, language and keys"),
 )
 
-ITEM_W, ITEM_H, SKEW = 540, 84, 22
+ITEM_W, ITEM_H, SKEW = 540, 76, 22   # seven entries fit a 720-pixel window
 
 
 class MenuItem:

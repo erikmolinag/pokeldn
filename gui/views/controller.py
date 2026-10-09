@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 import flet as ft
 
 from gui import theme as t
+from gui.i18n import tr
 from gui.views import widgets
 from gui.views.widgets import open_folder
 from pokeldn.app import macros
@@ -64,15 +65,18 @@ def start_service(on_exit=lambda code: None) -> Process | None:
 
 def describe(step: dict, macro: m.Macro) -> str:
     if "wait" in step:
-        return f"Wait {step['wait']} ms"
+        return tr("Wait {ms} ms", ms=step["wait"])
     if "repeat" in step:
-        return f"Repeat {step['repeat']} times"
+        return tr("Repeat {n} times", n=step["repeat"])
     keys = step.get("press", [])
     keys = [keys] if isinstance(keys, str) else list(keys)
     for side in ("left", "right"):
         if side in step:
-            keys.append(f"{side} stick {direction_of(step[side])[1].lower()}")
-    return f"{' + '.join(keys) or 'Nothing'}  ·  {step.get('ms', macro.press_ms)} ms, then {step.get('after', macro.gap_ms)} ms"
+            direction = tr(direction_of(step[side])[1]).lower()
+            keys.append(tr("left stick {direction}", direction=direction) if side == "left" else
+                        tr("right stick {direction}", direction=direction))
+    return tr("{keys}  ·  {ms} ms, then {after} ms", keys=" + ".join(keys) or tr("Nothing"),
+              ms=step.get("ms", macro.press_ms), after=step.get("after", macro.gap_ms))
 
 
 def direction_of(xy) -> tuple[str, str, tuple]:
@@ -108,17 +112,17 @@ class ControllerView:
         self.footer = ft.Column(spacing=8, tight=True)
         self.control = ft.Row([
             t.panel(ft.Column([
-                t.panel_header("Macros",
-                               t.icon_button("plus", lambda e: self.new(), "New macro"),
-                               t.icon_button("upload", self._import, "Import a .pokemacro file"),
+                t.panel_header(tr("Macros"),
+                               t.icon_button("plus", lambda e: self.new(), tr("New macro")),
+                               t.icon_button("upload", self._import, tr("Import a .pokemacro file")),
                                t.icon_button("folder", lambda e: open_folder(str(macros.library())),
-                                             "Open the macros folder")),
+                                             tr("Open the macros folder"))),
                 t.fade(self.list),
             ], spacing=0, expand=True), width=t.SIDEBAR_WIDTH),
             t.fade(ft.ListView([self.status, self.pad], spacing=t.GAP, padding=ft.Padding(0, 0, 0, 24),
                                expand=True)),
             t.panel(ft.Column([
-                t.panel_header("Macro"),
+                t.panel_header(tr("Macro")),
                 self.editor,
                 ft.Container(self.footer, padding=ft.Padding(18, 0, 18, 18)),
             ], spacing=0, expand=True), width=t.SESSION_WIDTH),
@@ -295,7 +299,7 @@ class ControllerView:
             self.path, self.macro = None, None
         rows = [self._row(entry) for entry in self.items]
         self.list.controls = rows or [ft.Container(t.text(
-            "No macros yet. Make one with +, or import a .pokemacro someone shared.", 12, t.MUTED),
+            tr("No macros yet. Make one with +, or import a .pokemacro someone shared."), 12, t.MUTED),
             padding=10)]
 
     def _row(self, entry: macros.Entry) -> ft.Control:
@@ -313,7 +317,7 @@ class ControllerView:
             self.macro, self.path = macros.load(path), path
             self._say("")
         except (OSError, m.MacroError) as error:
-            self._say(f"This file does not load: {error}", t.RED)
+            self._say(tr("This file does not load: {error}", error=error), t.RED)
             return
         self.recording = False
         self.refresh_list()
@@ -321,7 +325,7 @@ class ControllerView:
         self.control.update()
 
     def new(self) -> None:
-        macro = m.Macro(name="New macro", loops=1)
+        macro = m.Macro(name=tr("New macro"), loops=1)
         self.path = macros.save(macro)
         self.macro = macro
         self.refresh_list()
@@ -348,7 +352,7 @@ class ControllerView:
     async def _export(self, e) -> None:
         if self.macro is None:
             return
-        path = await self.app.picker.save_file(dialog_title="Export macro",
+        path = await self.app.picker.save_file(dialog_title=tr("Export macro"),
                                                file_name=f"{self.macro.name}{m.EXTENSION}",
                                                file_type=ft.FilePickerFileType.CUSTOM,
                                                allowed_extensions=[m.EXTENSION[1:]])
@@ -358,7 +362,7 @@ class ControllerView:
         try:
             with open(path, "w", encoding="utf-8") as out:
                 out.write(self.macro.dumps())
-            self._say(f"Exported to {path}")
+            self._say(tr("Exported to {path}", path=path))
         except OSError as error:
             self._say(str(error), t.RED)
 
@@ -372,11 +376,11 @@ class ControllerView:
             self.control.update()
 
         self.app.page.show_dialog(t.dialog(
-            title=t.text("Delete this macro?", 18),
-            content=t.text(f"{self.macro.name} is deleted from this computer. Export it first to keep a file.",
-                           13, t.MUTED, width=380),
-            actions=[t.button("Cancel", lambda e: self.app.page.pop_dialog(), filled=False),
-                     t.button("Delete", done, color=t.RED)]))
+            title=t.text(tr("Delete this macro?"), 18),
+            content=t.text(tr("{name} is deleted from this computer. Export it first to keep a file.",
+                              name=self.macro.name), 13, t.MUTED, width=380),
+            actions=[t.button(tr("Cancel"), lambda e: self.app.page.pop_dialog(), filled=False),
+                     t.button(tr("Delete"), done, color=t.RED)]))
 
     # Playing
 
@@ -393,7 +397,7 @@ class ControllerView:
         def run():
             reply = self._call("play", macro=self.macro.dumps())
             if reply:
-                self._say("Playing on the board. It keeps going if this computer sleeps.")
+                self._say(tr("Playing on the board. It keeps going if this computer sleeps."))
                 self.board = {**self.board, "playing": True}
                 self.app.ui(self.render_all_update)
         threading.Thread(target=run, daemon=True).start()
@@ -419,26 +423,26 @@ class ControllerView:
         facts = []
         if connected:
             link = board.get("link", "")
-            facts.append(t.chip(f"Board connected on {link.split(' ')[1]}" if link.startswith("serial ")
-                                else "Board connected over Bluetooth", "check", t.GREEN))
+            facts.append(t.chip(tr("Board connected on {port}", port=link.split(' ')[1]) if link.startswith("serial ")
+                                else tr("Board connected over Bluetooth"), "check", t.GREEN))
             facts.append(self.where(board))
-        action = (t.button("Disconnect", self.disconnect, "close", filled=False) if connected else
-                  t.button("Stop looking", self.disconnect, "close", filled=False) if lost else
-                  t.button("Looking..." if self.connecting else "Connect", self.connect, "zap",
+        action = (t.button(tr("Disconnect"), self.disconnect, "close", filled=False) if connected else
+                  t.button(tr("Stop looking"), self.disconnect, "close", filled=False) if lost else
+                  t.button(tr("Looking...") if self.connecting else tr("Connect"), self.connect, "zap",
                            disabled=self.connecting))
-        body = [ft.Row([ft.Row(facts or [t.text(self.state, 13, t.MUTED)], spacing=6, wrap=True, expand=True),
+        body = [ft.Row([ft.Row(facts or [t.text(tr(self.state), 13, t.MUTED)], spacing=6, wrap=True, expand=True),
                         action], vertical_alignment=ft.CrossAxisAlignment.CENTER)]
         if self.error:
-            body.append(t.text(self.error, 12, t.RED))
+            body.append(t.text(tr(self.error), 12, t.RED))
         if not connected and not lost:
             body += self.guidance()
         if board.get("playing"):
             body.append(ft.Row([
-                t.badge(f"Macro running: loop {board.get('loops_done', 0) + 1}, "
-                        f"step {board.get('index', 0) + 1} of {board.get('count', 0)}", t.BLUE, "play"),
-                t.button("Stop", self.stop, "stop", color=t.RED)],
+                t.badge(tr("Macro running: loop {loop}, step {step} of {count}", loop=board.get('loops_done', 0) + 1,
+                           step=board.get('index', 0) + 1, count=board.get('count', 0)), t.BLUE, "play"),
+                t.button(tr("Stop"), self.stop, "stop", color=t.RED)],
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN))
-        self.status.controls = [t.card("Controller board", ft.Column(body, spacing=10, tight=True))]
+        self.status.controls = [t.card(tr("Controller board"), ft.Column(body, spacing=10, tight=True))]
         self.render_footer()
         if update:
             try:
@@ -451,31 +455,31 @@ class ControllerView:
         """Where the board is plugged in. `mounted` says only that some USB host configured it: this
         computer does too, so being on this computer's USB bus is asked first."""
         if board.get("link", "").startswith("serial "):   # a classic board pairs over Bluetooth Classic
-            return (t.chip("Paired with the Switch", "check", t.GREEN) if board.get("mounted") else
-                    t.chip("Not paired: on the Switch, open Controllers, Change Grip/Order", "usb", t.AMBER))
+            return (t.chip(tr("Paired with the Switch"), "check", t.GREEN) if board.get("mounted") else
+                    t.chip(tr("Not paired: on the Switch, open Controllers, Change Grip/Order"), "usb", t.AMBER))
         if self.app.controllers:
-            return t.chip("Plugged into this computer: plug it into the Switch to play", "usb", t.AMBER)
+            return t.chip(tr("Plugged into this computer: plug it into the Switch to play"), "usb", t.AMBER)
         if board.get("mounted"):
-            return t.chip("Plugged into the Switch", "check", t.GREEN)
-        return t.chip("Not plugged into the Switch", "usb", t.AMBER)
+            return t.chip(tr("Plugged into the Switch"), "check", t.GREEN)
+        return t.chip(tr("Not plugged into the Switch"), "usb", t.AMBER)
 
     def guidance(self) -> list[ft.Control]:
         """What is plugged in and the next step, while no board is connected."""
         from gui import board
-        to_board = t.secondary_button("Open the Board page", lambda e: self.app.navigate("board"), "cpu")
+        to_board = t.secondary_button(tr("Open the Board page"), lambda e: self.app.navigate("board"), "cpu")
         if self.app.controllers:
-            return [t.text("A controller board is plugged into this computer. Press Connect to reach it over "
-                           "Bluetooth. To play, plug it into the Switch's USB-C port; it reconnects on its own.",
+            return [t.text(tr("A controller board is plugged into this computer. Press Connect to reach it over "
+                              "Bluetooth. To play, plug it into the Switch's USB-C port; it reconnects on its own."),
                            12, t.MUTED)]
         radios = [d for d, ident in self.app.identities.items() if isinstance(ident, board.Identity)]
         if radios:
-            return [t.text("The board plugged in runs the wireless firmware, for trades. To use it as a controller, "
-                           "install the Controller firmware on the Board page.",
+            return [t.text(tr("The board plugged in runs the wireless firmware, for trades. To use it as a "
+                              "controller, install the Controller firmware on the Board page."),
                            12, t.MUTED), ft.Row([to_board])]
-        return [t.text("No controller board found. An ESP32-S3 with the controller firmware plugs into the "
-                       "Switch's USB-C port and this computer reaches it over Bluetooth; a classic ESP32 stays "
-                       "plugged into this computer and pairs with the Switch as a Pro Controller. Install it on "
-                       "the Board page.", 12, t.MUTED), ft.Row([to_board])]
+        return [t.text(tr("No controller board found. An ESP32-S3 with the controller firmware plugs into the "
+                          "Switch's USB-C port and this computer reaches it over Bluetooth; a classic ESP32 stays "
+                          "plugged into this computer and pairs with the Switch as a Pro Controller. Install it on "
+                          "the Board page."), 12, t.MUTED), ft.Row([to_board])]
 
     def _button(self, key: str, label: str, width=44, height=44, round_=True, icon: str = "") -> ft.Control:
         hint = HINT.get(key, "")
@@ -522,35 +526,36 @@ class ControllerView:
             ft.Row([b("B", "B")], alignment=ft.MainAxisAlignment.CENTER, width=140),
         ], spacing=0, tight=True)
         middle = ft.Row([
-            ft.Column([t.text("Left stick", 11, t.MUTED), self._cross("LS_", b("LSTICK", "L3", 40, 40))],
+            ft.Column([t.text(tr("Left stick"), 11, t.MUTED), self._cross("LS_", b("LSTICK", "L3", 40, 40))],
                       spacing=6, horizontal_alignment=ft.CrossAxisAlignment.CENTER, tight=True),
             face,
         ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, width=560,
             vertical_alignment=ft.CrossAxisAlignment.CENTER)
         lower = ft.Row([
-            ft.Column([t.text("D-pad", 11, t.MUTED), self._cross("", None)], spacing=6,
+            ft.Column([t.text(tr("D-pad"), 11, t.MUTED), self._cross("", None)], spacing=6,
                       horizontal_alignment=ft.CrossAxisAlignment.CENTER, tight=True),
             ft.Row([b("CAPTURE", "Capture", 40, 40, False, "camera"), b("HOME", "HOME", 40, 40, True, "home")],
                    spacing=24),
-            ft.Column([t.text("Right stick", 11, t.MUTED), self._cross("RS_", b("RSTICK", "R3", 40, 40))],
+            ft.Column([t.text(tr("Right stick"), 11, t.MUTED), self._cross("RS_", b("RSTICK", "R3", 40, 40))],
                       spacing=6, horizontal_alignment=ft.CrossAxisAlignment.CENTER, tight=True),
         ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN, width=560,
             vertical_alignment=ft.CrossAxisAlignment.CENTER)
         options = ft.Row([
-            ft.Row([t.switch(self.keyboard, self._keyboard), t.text("Keyboard", 13, t.SOFT)], spacing=6, tight=True,
-                   tooltip="Arrows for the D-pad, X A, Z B, S X, A Y, Q L, W R, 1 ZL, 2 ZR, Enter +, "
-                           "Backspace -, H HOME, C Capture"),
-            ft.Row([t.switch(self.recording, self._recording), t.text("Record into the macro", 13, t.SOFT)],
+            ft.Row([t.switch(self.keyboard, self._keyboard), t.text(tr("Keyboard"), 13, t.SOFT)], spacing=6,
+                   tight=True,
+                   tooltip=tr("Arrows for the D-pad, X A, Z B, S X, A Y, Q L, W R, 1 ZL, 2 ZR, Enter +, "
+                              "Backspace -, H HOME, C Capture")),
+            ft.Row([t.switch(self.recording, self._recording), t.text(tr("Record into the macro"), 13, t.SOFT)],
                    spacing=6, tight=True,
-                   tooltip="Each press, its length and the pause before the next one become steps"),
+                   tooltip=tr("Each press, its length and the pause before the next one become steps")),
         ], spacing=24)
-        self.pad.controls = [t.card("Controller", ft.Column([
+        self.pad.controls = [t.card(tr("Controller"), ft.Column([
             ft.Container(ft.Column([shoulders, middle, lower], spacing=22, tight=True,
                                    horizontal_alignment=ft.CrossAxisAlignment.CENTER),
                          padding=ft.Padding(0, 8, 0, 8), alignment=ft.Alignment.CENTER),
             options,
         ], spacing=16, tight=True, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
-            "Hold a button to hold it on the console.")]
+            tr("Hold a button to hold it on the console."))]
 
     def _keyboard(self, e) -> None:
         self.keyboard = e.control.value
@@ -570,7 +575,7 @@ class ControllerView:
     def render_editor(self, update: bool = True) -> None:
         mac = self.macro
         if mac is None:
-            self.editor.controls = [t.text("Pick a macro on the left, or make a new one with +.", 13, t.MUTED)]
+            self.editor.controls = [t.text(tr("Pick a macro on the left, or make a new one with +."), 13, t.MUTED)]
         else:
             self.editor.controls = [
                 self._text_field("Name", mac.name, lambda v: setattr(mac, "name", v or "Macro")),
@@ -603,8 +608,9 @@ class ControllerView:
             if label == "Name":
                 self.refresh_list()
                 self.list.update()
-        return t.labeled_control(label, t.field(value=value, multiline=multiline, min_lines=2 if multiline else None,
-                                                on_blur=changed, on_submit=changed))
+        return t.labeled_control(tr(label), t.field(value=value, multiline=multiline,
+                                                    min_lines=2 if multiline else None,
+                                                    on_blur=changed, on_submit=changed))
 
     def _number(self, label, value, setter, tip: str = "") -> ft.Control:
         def changed(e):
@@ -612,14 +618,14 @@ class ControllerView:
             self.save()
             self.render_footer()
             self.footer.update()
-        return t.labeled_control(label, t.field(value=str(value), digits=True, limit=7, on_blur=changed,
-                                                on_submit=changed, tooltip=tip or None), expand=True)
+        return t.labeled_control(tr(label), t.field(value=str(value), digits=True, limit=7, on_blur=changed,
+                                                    on_submit=changed, tooltip=tr(tip) or None), expand=True)
 
     def _section(self, title: str, target: str, steps: list) -> ft.Control:
-        rec = t.chip("Recording here", "circle-info", t.RED) if self.recording and self.target == target else \
-            ft.Container(t.text("Record here", 11, t.FAINT), on_click=lambda e: self._target(target),
+        rec = t.chip(tr("Recording here"), "circle-info", t.RED) if self.recording and self.target == target else \
+            ft.Container(t.text(tr("Record here"), 11, t.FAINT), on_click=lambda e: self._target(target),
                          visible=self.recording)
-        return t.section(title, ft.Column([
+        return t.section(tr(title), ft.Column([
             *self._steps(steps, 0),
             self._adders(steps),
         ], spacing=4, tight=True), rec)
@@ -638,10 +644,10 @@ class ControllerView:
             rows.append(ft.Container(ft.Row([
                 t.pixel_icon(icon, size=12, color=t.MUTED),
                 t.text(label, 12, t.SOFT, expand=True, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
-                t.icon_button("arrow-up", lambda e, s=steps, n=i: self._move(s, n, -1), "Move up",
+                t.icon_button("arrow-up", lambda e, s=steps, n=i: self._move(s, n, -1), tr("Move up"),
                               disabled=i == 0),
-                t.icon_button("edit", lambda e, s=steps, n=i: self._edit(s, n), "Edit"),
-                t.icon_button("trash", lambda e, s=steps, n=i: self._remove_step(s, n), "Remove"),
+                t.icon_button("edit", lambda e, s=steps, n=i: self._edit(s, n), tr("Edit")),
+                t.icon_button("trash", lambda e, s=steps, n=i: self._remove_step(s, n), tr("Remove")),
             ], spacing=4), padding=ft.Padding(8 + 14 * depth, 2, 0, 2), border_radius=8, bgcolor=t.CARD))
             if "repeat" in step:
                 inner = step.setdefault("steps", [])
@@ -658,9 +664,9 @@ class ControllerView:
             self.render_editor()
             if kind != "repeat":
                 self._edit(steps, len(steps) - 1)
-        return ft.Row([t.link_button("+ Press", lambda e: add("press")),
-                       t.link_button("+ Wait", lambda e: add("wait")),
-                       t.link_button("+ Repeat", lambda e: add("repeat"))], spacing=0)
+        return ft.Row([t.link_button(tr("+ Press"), lambda e: add("press")),
+                       t.link_button(tr("+ Wait"), lambda e: add("wait")),
+                       t.link_button(tr("+ Repeat"), lambda e: add("repeat"))], spacing=0)
 
     def _move(self, steps, n, delta) -> None:
         steps[n + delta], steps[n] = steps[n], steps[n + delta]
@@ -679,13 +685,13 @@ class ControllerView:
 
         if "wait" in step:
             wait = t.field(value=str(step["wait"]), digits=True, limit=7)
-            controls.append(t.labeled_control("Wait (ms)", wait))
+            controls.append(t.labeled_control(tr("Wait (ms)"), wait))
 
             def collect():
                 return {"wait": int(wait.value or 0), **({"note": note.value} if note.value else {})}
         elif "repeat" in step:
             count = t.field(value=str(step["repeat"]), digits=True, limit=5)
-            controls.append(t.labeled_control("Times", count))
+            controls.append(t.labeled_control(tr("Times"), count))
 
             def collect():
                 return {"repeat": max(1, int(count.value or 1)), "steps": step.get("steps", []),
@@ -711,18 +717,19 @@ class ControllerView:
             sticks = {}
             for side, label in (("left", "Left stick"), ("right", "Right stick")):
                 current = direction_of(step[side])[0] if side in step else ""
-                sticks[side] = t.dropdown([(d[0] or "CENTRE", d[1]) for d in STICK_DIRECTIONS],
+                sticks[side] = t.dropdown([(d[0] or "CENTRE", tr(d[1])) for d in STICK_DIRECTIONS],
                                           current or "CENTRE")
-                controls_side = t.labeled_control(label, sticks[side], expand=True)
+                controls_side = t.labeled_control(tr(label), sticks[side], expand=True)
                 sticks[side + "_row"] = controls_side
             hold = t.field(value=str(step.get("ms", "")), digits=True, limit=7,
-                           hint=f"{self.macro.press_ms}, the macro's")
+                           hint=tr("{ms}, the macro's", ms=self.macro.press_ms))
             after = t.field(value=str(step.get("after", "")), digits=True, limit=7,
-                            hint=f"{self.macro.gap_ms}, the macro's")
-            controls += [t.text("Buttons held together", 11, t.MUTED), chips,
+                            hint=tr("{ms}, the macro's", ms=self.macro.gap_ms))
+            controls += [t.text(tr("Buttons held together"), 11, t.MUTED), chips,
                          ft.Row([sticks["left_row"], sticks["right_row"]], spacing=10, width=420),
-                         ft.Row([t.labeled_control("Hold (ms)", hold, expand=True),
-                                 t.labeled_control("Pause after (ms)", after, expand=True)], spacing=10, width=420)]
+                         ft.Row([t.labeled_control(tr("Hold (ms)"), hold, expand=True),
+                                 t.labeled_control(tr("Pause after (ms)"), after, expand=True)], spacing=10,
+                                width=420)]
 
             def collect():
                 out = {"press": sorted(chosen, key=m.KEYS.index)}
@@ -739,8 +746,8 @@ class ControllerView:
                     out["note"] = note.value
                 return {k: v for k, v in out.items() if k != "note" or v}
 
-        note = t.field(value=step.get("note", ""), hint="What this step is for")
-        controls.append(t.labeled_control("Note (optional)", note))
+        note = t.field(value=step.get("note", ""), hint=tr("What this step is for"))
+        controls.append(t.labeled_control(tr("Note (optional)"), note))
 
         def done(e):
             new = collect()
@@ -757,28 +764,29 @@ class ControllerView:
 
         error_text = t.text("", 12, t.RED)
         page.show_dialog(t.dialog(
-            title=t.text("Edit step", 18),
+            title=t.text(tr("Edit step"), 18),
             content=ft.Column([*controls, error_text], spacing=10, tight=True, width=420),
-            actions=[t.button("Cancel", lambda e: page.pop_dialog(), filled=False), t.button("Save", done)]))
+            actions=[t.button(tr("Cancel"), lambda e: page.pop_dialog(), filled=False), t.button(tr("Save"), done)]))
 
     def _summary(self) -> ft.Control:
         try:
             p = m.compile_macro(self.macro)
         except m.MacroError as error:
             return t.text(str(error), 12, t.AMBER)
-        loops = "until stopped" if p.loops == 0 else f"x{p.loops}"
-        return t.text(f"{len(p.entries)} of {m.MAX_ENTRIES} board steps  ·  run once {p.setup_ms / 1000:g} s  ·  "
-                      f"loop {p.loop_ms / 1000:g} s {loops}", 12, t.MUTED)
+        loops = tr("until stopped") if p.loops == 0 else f"x{p.loops}"
+        return t.text(tr("{steps} of {limit} board steps  ·  run once {setup} s  ·  loop {loop} s {loops}",
+                         steps=len(p.entries), limit=m.MAX_ENTRIES, setup=f"{p.setup_ms / 1000:g}",
+                         loop=f"{p.loop_ms / 1000:g}", loops=loops), 12, t.MUTED)
 
     def _actions(self) -> ft.Control:
         connected = self.client is not None
         playing = bool(self.board.get("playing"))
-        main = (t.button("Stop", self.stop, "stop", color=t.RED) if playing else
-                t.button("Play on the board", self.play, "play", disabled=not connected,
-                         tooltip=None if connected else "Connect the board first"))
+        main = (t.button(tr("Stop"), self.stop, "stop", color=t.RED) if playing else
+                t.button(tr("Play on the board"), self.play, "play", disabled=not connected,
+                         tooltip=None if connected else tr("Connect the board first")))
         return ft.Row([main, ft.Row([
-            t.icon_button("download", self._export, "Export as a .pokemacro file to share"),
-            t.icon_button("trash", lambda e: self._delete(), "Delete this macro"),
+            t.icon_button("download", self._export, tr("Export as a .pokemacro file to share")),
+            t.icon_button("trash", lambda e: self._delete(), tr("Delete this macro")),
         ], spacing=2)], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
 
     def _say(self, text: str, color: str = t.MUTED) -> None:

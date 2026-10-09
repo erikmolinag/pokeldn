@@ -211,8 +211,6 @@ FRLG_TRAINER = Tool("frlg-trainer", "Read my trainer", "bin/frlg_trade_host.py",
                            "--id", "{tid}:{sid}", "--out", "{received}/frlg-identify-{stamp}.pk3"),
                     doc="frlg_link.md")
 
-# The desktop app's own list: FireRed and LeafGreen only, the trainer reader first.
-APP_GAMES = (Game(FRLG.key, FRLG.name, FRLG.short, FRLG.doc, (FRLG_TRAINER, *FRLG.tools)),)
 
 LGPE_STEPS = "X, Communicate, Local Communication, Trade, enter the same link code, then search."
 
@@ -481,3 +479,6 @@ GAMES = (
     with_online(ZA, ("X, Link Play, Link Trade, Nearby Players, the same code, then search.",
                      "Pick on the trade box, offer, then trade.")),
 )
+
+# poke-app's own list: FireRed and LeafGreen only (with their online trade), the trainer reader first.
+APP_GAMES = tuple(replace(game, tools=(FRLG_TRAINER, *game.tools)) for game in GAMES if game.key == "frlg")

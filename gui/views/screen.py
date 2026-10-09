@@ -52,14 +52,17 @@ class ScreenView:
 class OptionsView:
     """Settings, the board and the guide on one screen, switched by tabs."""
 
-    TABS = (("settings", "Settings", "gear"), ("board", "Board", "cpu"), ("docs", "Guide", "book-open"))
+    TABS = (("settings", "Settings", "gear"), ("board", "Board", "cpu"), ("controller", "Control", "joystick"),
+            ("docs", "Guide", "book-open"))
 
     def __init__(self, app):
         from gui.views.boards import BoardView
+        from gui.views.controller import ControllerView
         from gui.views.docs import DocsView
         from gui.views.settings import SettingsView
         self.app = app
-        self.views = {"settings": SettingsView(app), "board": BoardView(app), "docs": DocsView(app)}
+        self.views = {"settings": SettingsView(app), "board": BoardView(app), "controller": ControllerView(app),
+                      "docs": DocsView(app)}
         self.tab = "settings"
         self.tabs = ft.Container()
         self.body = ft.Container(expand=True)

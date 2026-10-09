@@ -55,7 +55,9 @@ def test_the_app_lists_firered_and_leafgreen_with_the_trainer_reader_first():
     assert game.key == "frlg"
     first = game.tools[0]
     assert first.key == "frlg-trainer" and "--identify" in first.fixed
-    assert [t.key for t in game.tools[1:]] == [t.key for t in catalog.FRLG.tools]
+    frlg = next(g for g in catalog.GAMES if g.key == "frlg")
+    assert [t.key for t in game.tools[1:]] == [t.key for t in frlg.tools]
+    assert "frlg-trade-online" in [t.key for t in game.tools]
 
 
 def test_identify_needs_no_party_file():

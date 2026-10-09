@@ -769,3 +769,304 @@ del _n, _version, _version_es, _language, _language_es, _en, _es, _where, _where
 ES_EXTRA["Game Corner coins"] = "Monedas del Casino"
 ES_EXTRA["9999 coins for the Game Corner, again whenever you need more."] = (
     "9999 monedas para el Casino, cada vez que necesites más.")
+
+# poke-app: the Board page (gui/views/boards.py) and its firmware list (gui/board.py FIRMWARES)
+ES_EXTRA["Checks and installs show their output here."] = "Aquí aparece lo que muestran las revisiones y las instalaciones."
+ES_EXTRA["Look again"] = "Buscar otra vez"
+ES_EXTRA["{chip} board"] = "Placa {chip}"
+ES_EXTRA["ESP32 board"] = "Placa ESP32"
+ES_EXTRA["pokeldn board"] = "Placa de pokeldn"
+ES_EXTRA["Needs attention"] = "Requiere atención"
+ES_EXTRA["Plug it into this computer with a data cable. It shows up here on its own."] = (
+    "Conéctala a esta computadora con un cable de datos. Aparece aquí sola.")
+ES_EXTRA["Working"] = "Trabajando"
+ES_EXTRA["Installing {name} firmware"] = "Instalando el firmware {name}"
+ES_EXTRA["Keep the board plugged in. About a minute."] = "Deja la placa conectada. Tarda como un minuto."
+ES_EXTRA["Asking the board over Bluetooth for its firmware version."] = (
+    "Preguntándole a la placa por Bluetooth la versión de su firmware.")
+ES_EXTRA["Version unknown"] = "Versión desconocida"
+ES_EXTRA["Install a firmware below. The Wireless firmware is the one every Games tool needs."] = (
+    "Instala un firmware de abajo. El firmware Inalámbrico es el que necesita cada herramienta de Juegos.")
+ES_EXTRA["Install {name}"] = "Instalar {name}"
+ES_EXTRA["Update required"] = "Actualización necesaria"
+ES_EXTRA["This firmware speaks an older protocol than this app. Update it to use the board."] = (
+    "Este firmware usa un protocolo más viejo que esta app. Actualízalo para usar la placa.")
+ES_EXTRA["Update available: {version}"] = "Actualización disponible: {version}"
+ES_EXTRA["{name} firmware {version} is included with this app. This board runs {installed}."] = (
+    "El firmware {name} {version} viene con esta app. Esta placa tiene la {installed}.")
+ES_EXTRA["Up to date"] = "Al día"
+ES_EXTRA["{name} firmware {version} is the newest this app includes."] = (
+    "El firmware {name} {version} es el más nuevo que trae esta app.")
+ES_EXTRA["{name} firmware."] = "Firmware {name}."
+ES_EXTRA["Use for trades"] = "Usar para intercambios"
+ES_EXTRA["Open Control"] = "Abrir Control"
+ES_EXTRA["Installed · {version}"] = "Instalado · {version}"
+ES_EXTRA["Installed"] = "Instalado"
+ES_EXTRA["Not available on {chip}"] = "No disponible en {chip}"
+ES_EXTRA["Install"] = "Instalar"
+ES_EXTRA["Install from a file..."] = "Instalar desde un archivo..."
+ES_EXTRA["This copy of the app has no firmware images (a copy run from source). Download the released ones; no "
+         "ESP-IDF needed."] = (
+    "Esta copia de la app no trae imágenes de firmware (se ejecuta desde el código fuente). Descarga las "
+    "publicadas; no necesitas ESP-IDF.")
+ES_EXTRA["A board runs one firmware at a time. Switching takes about a minute, and you can switch back whenever "
+         "you like."] = (
+    "Una placa usa un firmware a la vez. Cambiar tarda como un minuto, y puedes volver al otro cuando quieras.")
+ES_EXTRA["Chip"] = "Chip"
+ES_EXTRA["Unknown"] = "Desconocido"
+ES_EXTRA["None"] = "Ninguno"
+ES_EXTRA["Connection"] = "Conexión"
+ES_EXTRA["USB to this computer, as a controller; Bluetooth to this app"] = (
+    "USB a esta computadora, como mando; Bluetooth a esta app")
+ES_EXTRA["USB serial, {bridge}"] = "USB serie, {bridge}"
+ES_EXTRA["Save the name"] = "Guardar el nombre"
+ES_EXTRA["About this board"] = "Acerca de esta placa"
+ES_EXTRA["The board did not answer over Bluetooth ({error}). Is Bluetooth on?"] = (
+    "La placa no respondió por Bluetooth ({error}). ¿Está encendido el Bluetooth?")
+ES_EXTRA["It replaces the {name} firmware: the board stops working as {role} until you install {name} again."] = (
+    "Reemplaza el firmware {name}: la placa deja de funcionar como {role} hasta que vuelvas a instalar {name}.")
+ES_EXTRA["Keep the board plugged into this computer. It takes about a minute."] = (
+    "Deja la placa conectada a esta computadora. Tarda como un minuto.")
+ES_EXTRA["From the file {name}."] = "Desde el archivo {name}."
+ES_EXTRA["Install {name} firmware?"] = "¿Instalar el firmware {name}?"
+ES_EXTRA["Starting..."] = "Empezando..."
+ES_EXTRA["Asking the board to restart for installing..."] = "Pidiéndole a la placa que se reinicie para instalar..."
+ES_EXTRA["The board did not answer over Bluetooth ({error})."] = "La placa no respondió por Bluetooth ({error})."
+ES_EXTRA["Waiting for the board to restart..."] = "Esperando a que la placa se reinicie..."
+ES_EXTRA["The board did not come back for installing."] = "La placa no volvió para instalar."
+ES_EXTRA["The install did not finish."] = "La instalación no terminó."
+ES_EXTRA["Installed. Plug the board into the Switch's USB-C port and open Control."] = (
+    "Instalado. Conecta la placa al puerto USB-C de la Switch y abre Control.")
+ES_EXTRA["Installed. Checking the board..."] = "Instalado. Revisando la placa..."
+ES_EXTRA["{why} Unplug the board, hold its BOOT button while plugging it back in, let go, then choose Install "
+         "again on the board that appears. On a board with two USB ports, use the one marked USB."] = (
+    "{why} Desconecta la placa, mantén su botón BOOT mientras la vuelves a conectar, suéltalo y elige Instalar "
+    "otra vez en la placa que aparezca. En una placa con dos puertos USB, usa el que dice USB.")
+ES_EXTRA["Use a classic ESP32 (ESP32-D0WD, WROOM-32E), or an ESP32-S3, C3 or C6 through its native USB port, the "
+         "one marked USB. S2 boards are not supported."] = (
+    "Usa un ESP32 clásico (ESP32-D0WD, WROOM-32E), o un ESP32-S3, C3 o C6 por su puerto USB nativo, el que dice "
+    "USB. Las placas S2 no son compatibles.")
+ES_EXTRA["An install stuck on Connecting: hold the board's BOOT button until writing starts."] = (
+    "¿La instalación se queda en Conectando? Mantén el botón BOOT de la placa hasta que empiece a escribir.")
+ES_EXTRA["A controller board is listed only while it is plugged into this computer."] = (
+    "Una placa de mando solo aparece mientras está conectada a esta computadora.")
+ES_EXTRA["Board not listed, or not answering?"] = "¿Tu placa no aparece o no responde?"
+ES_EXTRA["Wireless"] = "Inalámbrico"
+ES_EXTRA["Controller"] = "Mando"
+ES_EXTRA["The board is the radio for trades, Mystery Gift and every tool on the Games page."] = (
+    "La placa es la radio para intercambios, Regalo Misterioso y cada herramienta de la página Juegos.")
+ES_EXTRA["The board is a controller for the Switch: this computer presses its buttons and plays macros from the "
+         "Control page."] = (
+    "La placa es un mando para la Switch: esta computadora presiona sus botones y reproduce macros desde la "
+    "página Control.")
+ES_EXTRA["the radio for trades"] = "la radio de los intercambios"
+ES_EXTRA["a controller for the Switch"] = "un mando para la Switch"
+
+# poke-app: board status lines new with the controller firmware (gui/app.py BoardStatus)
+ES_EXTRA["Your board runs the Controller firmware"] = "Tu placa tiene el firmware Mando"
+ES_EXTRA["Trades need the Wireless firmware: install it from the Board page."] = (
+    "Los intercambios necesitan el firmware Inalámbrico: instálalo desde la página Placa.")
+ES_EXTRA["Update it on the Board page."] = "Actualízalo en la página Placa."
+ES_EXTRA["Install the Wireless firmware on the Board page. If you just installed it, press the board's RESET (RST) "
+         "button."] = (
+    "Instala el firmware Inalámbrico en la página Placa. Si acabas de instalarlo, presiona el botón RESET (RST) de "
+    "la placa.")
+
+# poke-app: the controller page (gui/views/controller.py)
+ES_EXTRA["macOS refused Bluetooth to this program. The packaged app asks for it; from a source checkout, allow "
+         "Bluetooth for the terminal in System Settings, Privacy & Security."] = (
+    "macOS le negó el Bluetooth a este programa. La app empaquetada lo pide; desde el código fuente, permite el "
+    "Bluetooth para la terminal en Configuración del Sistema, Privacidad y seguridad.")
+ES_EXTRA["Not connected"] = "Sin conectar"
+ES_EXTRA["Looking for the board..."] = "Buscando la placa..."
+ES_EXTRA["Connected"] = "Conectada"
+ES_EXTRA["Board lost: looking for it again..."] = "Se perdió la placa: buscándola otra vez..."
+ES_EXTRA["Board lost: looking for it again. Is it plugged into the Switch or a USB power source?"] = (
+    "Se perdió la placa: buscándola otra vez. ¿Está conectada a la Switch o a una fuente de energía USB?")
+ES_EXTRA["Wait {ms} ms"] = "Esperar {ms} ms"
+ES_EXTRA["Repeat {n} times"] = "Repetir {n} veces"
+ES_EXTRA["left stick {direction}"] = "stick izquierdo {direction}"
+ES_EXTRA["right stick {direction}"] = "stick derecho {direction}"
+ES_EXTRA["{keys}  ·  {ms} ms, then {after} ms"] = "{keys}  ·  {ms} ms, luego {after} ms"
+ES_EXTRA["Nothing"] = "Nada"
+ES_EXTRA["Centre"] = "Centro"
+ES_EXTRA["Up"] = "Arriba"
+ES_EXTRA["Up-right"] = "Arriba-derecha"
+ES_EXTRA["Right"] = "Derecha"
+ES_EXTRA["Down-right"] = "Abajo-derecha"
+ES_EXTRA["Down"] = "Abajo"
+ES_EXTRA["Down-left"] = "Abajo-izquierda"
+ES_EXTRA["Left"] = "Izquierda"
+ES_EXTRA["Up-left"] = "Arriba-izquierda"
+ES_EXTRA["Macros"] = "Macros"
+ES_EXTRA["Macro"] = "Macro"
+ES_EXTRA["New macro"] = "Macro nueva"
+ES_EXTRA["Import a .pokemacro file"] = "Importar un archivo .pokemacro"
+ES_EXTRA["Open the macros folder"] = "Abrir la carpeta de macros"
+ES_EXTRA["No macros yet. Make one with +, or import a .pokemacro someone shared."] = (
+    "Todavía no hay macros. Crea una con + o importa un .pokemacro que alguien compartió.")
+ES_EXTRA["This file does not load: {error}"] = "Este archivo no se pudo cargar: {error}"
+ES_EXTRA["Export macro"] = "Exportar macro"
+ES_EXTRA["Delete this macro?"] = "¿Borrar esta macro?"
+ES_EXTRA["{name} is deleted from this computer. Export it first to keep a file."] = (
+    "{name} se borrará de esta computadora. Expórtala antes si quieres conservar el archivo.")
+ES_EXTRA["Playing on the board. It keeps going if this computer sleeps."] = (
+    "Reproduciendo en la placa. Sigue aunque esta computadora se suspenda.")
+ES_EXTRA["Board connected on {port}"] = "Placa conectada en {port}"
+ES_EXTRA["Board connected over Bluetooth"] = "Placa conectada por Bluetooth"
+ES_EXTRA["Disconnect"] = "Desconectar"
+ES_EXTRA["Stop looking"] = "Dejar de buscar"
+ES_EXTRA["Looking..."] = "Buscando..."
+ES_EXTRA["Connect"] = "Conectar"
+ES_EXTRA["Macro running: loop {loop}, step {step} of {count}"] = "Macro en curso: vuelta {loop}, paso {step} de {count}"
+ES_EXTRA["Controller board"] = "Placa de mando"
+ES_EXTRA["Paired with the Switch"] = "Emparejada con la Switch"
+ES_EXTRA["Not paired: on the Switch, open Controllers, Change Grip/Order"] = (
+    "Sin emparejar: en la Switch, abre Controllers, Change Grip/Order")
+ES_EXTRA["Plugged into this computer: plug it into the Switch to play"] = (
+    "Conectada a esta computadora: conéctala a la Switch para jugar")
+ES_EXTRA["Plugged into the Switch"] = "Conectada a la Switch"
+ES_EXTRA["Not plugged into the Switch"] = "Sin conectar a la Switch"
+ES_EXTRA["Open the Board page"] = "Abrir la página Placa"
+ES_EXTRA["A controller board is plugged into this computer. Press Connect to reach it over Bluetooth. To play, plug "
+         "it into the Switch's USB-C port; it reconnects on its own."] = (
+    "Hay una placa de mando conectada a esta computadora. Presiona Conectar para llegar a ella por Bluetooth. Para "
+    "jugar, conéctala al puerto USB-C de la Switch; se vuelve a conectar sola.")
+ES_EXTRA["The board plugged in runs the wireless firmware, for trades. To use it as a controller, install the "
+         "Controller firmware on the Board page."] = (
+    "La placa conectada tiene el firmware Inalámbrico, para intercambios. Para usarla como mando, instala el "
+    "firmware Mando en la página Placa.")
+ES_EXTRA["No controller board found. An ESP32-S3 with the controller firmware plugs into the Switch's USB-C port "
+         "and this computer reaches it over Bluetooth; a classic ESP32 stays plugged into this computer and pairs "
+         "with the Switch as a Pro Controller. Install it on the Board page."] = (
+    "No se encontró ninguna placa de mando. Un ESP32-S3 con el firmware Mando se conecta al puerto USB-C de la "
+    "Switch y esta computadora llega a él por Bluetooth; un ESP32 clásico se queda conectado a esta computadora y "
+    "se empareja con la Switch como un Pro Controller. Instálalo en la página Placa.")
+ES_EXTRA["Left stick"] = "Stick izquierdo"
+ES_EXTRA["Right stick"] = "Stick derecho"
+ES_EXTRA["D-pad"] = "Cruceta"
+ES_EXTRA["Keyboard"] = "Teclado"
+ES_EXTRA["Arrows for the D-pad, X A, Z B, S X, A Y, Q L, W R, 1 ZL, 2 ZR, Enter +, Backspace -, H HOME, "
+         "C Capture"] = (
+    "Flechas para la cruceta, X A, Z B, S X, A Y, Q L, W R, 1 ZL, 2 ZR, Enter +, Retroceso -, H HOME, C Capture")
+ES_EXTRA["Record into the macro"] = "Grabar en la macro"
+ES_EXTRA["Each press, its length and the pause before the next one become steps"] = (
+    "Cada pulsación, su duración y la pausa antes de la siguiente se vuelven pasos")
+ES_EXTRA["Hold a button to hold it on the console."] = "Mantén un botón para mantenerlo en la consola."
+ES_EXTRA["Pick a macro on the left, or make a new one with +."] = "Elige una macro a la izquierda o crea una nueva con +."
+ES_EXTRA["Description"] = "Descripción"
+ES_EXTRA["Press (ms)"] = "Pulsación (ms)"
+ES_EXTRA["Pause after (ms)"] = "Pausa después (ms)"
+ES_EXTRA["How long a step holds its buttons unless it says otherwise"] = (
+    "Cuánto mantiene un paso sus botones, salvo que diga otra cosa")
+ES_EXTRA["The pause after each step unless it says otherwise"] = "La pausa después de cada paso, salvo que diga otra cosa"
+ES_EXTRA["Repeat the loop (0 = until stopped)"] = "Repetir el bucle (0 = hasta detenerla)"
+ES_EXTRA["Run once"] = "Una vez"
+ES_EXTRA["Loop"] = "Bucle"
+ES_EXTRA["Recording here"] = "Grabando aquí"
+ES_EXTRA["Record here"] = "Grabar aquí"
+ES_EXTRA["Move up"] = "Subir"
+ES_EXTRA["+ Press"] = "+ Pulsar"
+ES_EXTRA["+ Wait"] = "+ Esperar"
+ES_EXTRA["+ Repeat"] = "+ Repetir"
+ES_EXTRA["Wait (ms)"] = "Espera (ms)"
+ES_EXTRA["Times"] = "Veces"
+ES_EXTRA["{ms}, the macro's"] = "{ms}, el de la macro"
+ES_EXTRA["Buttons held together"] = "Botones presionados a la vez"
+ES_EXTRA["Hold (ms)"] = "Mantener (ms)"
+ES_EXTRA["What this step is for"] = "Para qué es este paso"
+ES_EXTRA["Note (optional)"] = "Nota (opcional)"
+ES_EXTRA["Edit step"] = "Editar paso"
+ES_EXTRA["Save"] = "Guardar"
+ES_EXTRA["until stopped"] = "hasta detenerla"
+ES_EXTRA["{steps} of {limit} board steps  ·  run once {setup} s  ·  loop {loop} s {loops}"] = (
+    "{steps} de {limit} pasos de la placa  ·  una vez {setup} s  ·  bucle {loop} s {loops}")
+ES_EXTRA["Play on the board"] = "Reproducir en la placa"
+ES_EXTRA["Connect the board first"] = "Primero conecta la placa"
+ES_EXTRA["Export as a .pokemacro file to share"] = "Exportar como archivo .pokemacro para compartir"
+ES_EXTRA["Delete this macro"] = "Borrar esta macro"
+
+# poke-app: the bank (gui/views/bank.py)
+ES_EXTRA["Bank"] = "Banco"
+ES_EXTRA["Open the bank folder"] = "Abrir la carpeta del banco"
+ES_EXTRA["All Pokemon"] = "Todos los Pokémon"
+ES_EXTRA["The bank is empty. Every Pokemon a trade brings in lands here, from any game."] = (
+    "El banco está vacío. Cada Pokémon que recibes en un intercambio llega aquí, de cualquier juego.")
+ES_EXTRA["{n} Pokemon in the bank"] = "{n} Pokémon en el banco"
+ES_EXTRA["{n} Pokemon from {game}"] = "{n} Pokémon de {game}"
+ES_EXTRA["Pick a Pokemon to see where it can go."] = "Elige un Pokémon para ver a dónde puede ir."
+ES_EXTRA["In {game}"] = "En {game}"
+ES_EXTRA["Banked {when}"] = "Guardado el {when}"
+ES_EXTRA["PKHeX finds it not legal"] = "PKHeX lo marca como no legal"
+ES_EXTRA["Waiting to trade"] = "Esperando intercambio"
+ES_EXTRA["Queued in {tools}. It leaves the bank when that trade completes."] = (
+    "En cola en {tools}. Sale del banco cuando se complete ese intercambio.")
+ES_EXTRA["Open the trade"] = "Abrir el intercambio"
+ES_EXTRA["Take it out"] = "Sacarlo de la cola"
+ES_EXTRA["Send it to a game"] = "Mandarlo a un juego"
+ES_EXTRA["PKHeX is checking each game..."] = "PKHeX está revisando cada juego..."
+ES_EXTRA["Its own game"] = "Su propio juego"
+ES_EXTRA["Moves as HOME would move it"] = "Se mueve como lo haría HOME"
+ES_EXTRA["Queue it for a {game} trade:"] = "Ponlo en cola para un intercambio de {game}:"
+ES_EXTRA["Moving it to {game}..."] = "Moviéndolo a {game}..."
+ES_EXTRA["Export Pokemon"] = "Exportar Pokémon"
+ES_EXTRA["Remove this Pokemon?"] = "¿Quitar este Pokémon?"
+ES_EXTRA["{name} is deleted from the bank on this computer. Export it first to keep a file."] = (
+    "{name} se borrará del banco de esta computadora. Expórtalo antes si quieres conservar el archivo.")
+# a save, a macro or a Pokemon: one wording for all three
+ES_EXTRA["Exported to {path}"] = "Se exportó a {path}"
+# pokeldn.app.bank.enqueue, for the trades a banked Pokemon can be queued in
+for _tool, _tool_es in (("Trade (Host)", "Intercambio (anfitrión)"), ("Trade (Join)", "Intercambio (unirse)")):
+    for _n in range(1, 7):
+        ES_EXTRA[f"{_tool} already has {_n} Pokemon queued."] = f"{_tool_es} ya tiene {_n} Pokémon en cola."
+del _tool, _tool_es, _n
+
+# poke-app: the raid reward rows (gui/views/rewards.py)
+ES_EXTRA["Add reward"] = "Agregar recompensa"
+ES_EXTRA["1 to 999"] = "De 1 a 999"
+ES_EXTRA["Quantity"] = "Cantidad"
+ES_EXTRA["Remove reward"] = "Quitar recompensa"
+ES_EXTRA["The raid's own rewards, shown with the raid above."] = (
+    "Las recompensas propias de la incursión, que se muestran con la incursión de arriba.")
+
+# poke-app: the online trade's partner (gui/views/games.py SessionPanel)
+ES_EXTRA["Partner"] = "Compañero"
+ES_EXTRA["Connecting to the relays"] = "Conectando con los relés"
+ES_EXTRA["Looking for a partner"] = "Buscando un compañero"
+ES_EXTRA["Trading with {name}"] = "Intercambiando con {name}"
+ES_EXTRA["{name} left"] = "{name} se fue"
+ES_EXTRA["Your partner left"] = "Tu compañero se fue"
+ES_EXTRA["Anyone trading this game online without a code can be your partner."] = (
+    "Cualquiera que intercambie este juego en línea sin código puede ser tu compañero.")
+ES_EXTRA["Your partner enters the same code: {code}."] = "Tu compañero pone el mismo código: {code}."
+ES_EXTRA["Back out of the trade on the console. Start again to find a partner."] = (
+    "Sal del intercambio en la consola. Empieza otra vez para encontrar un compañero.")
+ES_EXTRA["They confirmed. Confirm on your console to trade."] = "Ya confirmó. Confirma en tu consola para intercambiar."
+ES_EXTRA["Waiting for them to confirm."] = "Esperando a que confirme."
+ES_EXTRA["Offer a Pokemon on your console; theirs appears here once they choose."] = (
+    "Ofrece un Pokémon en tu consola; el suyo aparece aquí en cuanto lo elija.")
+ES_EXTRA["PKHeX flags it: {flag}"] = "PKHeX lo marca: {flag}"
+ES_EXTRA["Trade {n}: {summary}"] = "Intercambio {n}: {summary}"
+ES_EXTRA["Trade {n} (done): {summary}"] = "Intercambio {n} (hecho): {summary}"
+
+# poke-app: FireRed/LeafGreen's online trade (pokeldn.app.catalog online() and ONLINE_CODE_HELP)
+ES_EXTRA["Trade (Online)"] = "Intercambio (en línea)"
+ES_EXTRA["Trade with a player far away: each of you hosts your own console, and the two trade through the "
+         "internet."] = (
+    "Intercambia con alguien lejos: cada quien conecta su propia consola y los dos intercambian por internet.")
+ES_EXTRA["Agree on a code with your partner, or leave it empty to meet anyone trading online."] = (
+    "Acuerda un código con tu compañero, o déjalo vacío para encontrarte con cualquiera que intercambie en línea.")
+ES_EXTRA["Start, then wait for 'Trading with' and your partner's name."] = (
+    "Presiona Empezar y espera a ver 'Intercambiando con' y el nombre de tu compañero.")
+ES_EXTRA["Your partner's party shows on the right: choose the Pokemon you send, then confirm."] = (
+    "El equipo de tu compañero aparece a la derecha: elige el Pokémon que mandas y confirma.")
+ES_EXTRA["Your partner's Pokemon appears once they offer it. The trade goes through once both of you confirm."] = (
+    "El Pokémon de tu compañero aparece en cuanto lo ofrece. El intercambio se hace cuando los dos confirman.")
+ES_EXTRA["Code"] = "Código"
+ES_EXTRA["Eight digits you and your partner agree on; you also enter them on the console. Empty meets anyone "
+         "trading this game online without a code."] = (
+    "Ocho dígitos que acuerdas con tu compañero; también los pones en la consola. Vacío: te encuentras con "
+    "cualquiera que intercambie este juego en línea sin código.")
+# the trainer reader's hidden Version field (pokeldn.app.catalog FRLG_TRAINER), on the Advanced tab
+ES_EXTRA["The game pokeldn's own trainer reports on the link."] = (
+    "El juego que informa el entrenador de pokeldn en la conexión.")
