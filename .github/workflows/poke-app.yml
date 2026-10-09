@@ -3,7 +3,7 @@ name: poke-app (Windows)
 # The Pokemon-styled FireRed/LeafGreen edition of the desktop app, built for Windows from the poke-app
 # branch. It runs by hand (Actions, poke-app (Windows), Run workflow) and on pushes to poke-app that touch
 # the app. The radio firmware is unchanged from upstream, so the images come from Decryptu/pokeldn's
-# release instead of four ESP-IDF builds. The zip is a workflow artifact; nothing is published.
+# release (radio and controller images) instead of six ESP-IDF builds. The zip is a workflow artifact; nothing is published.
 on:
   workflow_dispatch:
   push:
@@ -21,7 +21,7 @@ permissions:
   contents: read
 
 env:
-  FIRMWARE_RELEASE: v0.13.1
+  FIRMWARE_RELEASE: v0.18.3
 
 jobs:
   windows:
@@ -44,7 +44,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p gui/firmware
-          gh release download "$FIRMWARE_RELEASE" -R Decryptu/pokeldn -p "pokeldn-radio*.bin" -D gui/firmware
+          gh release download "$FIRMWARE_RELEASE" -R Decryptu/pokeldn -p "pokeldn-*.bin" -D gui/firmware
           ls -la gui/firmware
       - name: Install
         run: python -m pip install -r gui/requirements.txt
