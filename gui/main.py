@@ -32,7 +32,7 @@ import flet as ft  # noqa: E402
 from gui import drop, flet_client, screen, theme as t  # noqa: E402
 from gui.app import App  # noqa: E402
 from gui.views.widgets import page_key  # noqa: E402
-from pokeldn import __version__  # noqa: E402
+from pokeldn import __version__, popup  # noqa: E402
 from pokeldn.app import update  # noqa: E402
 from pokeldn.app.paths import ROOT  # noqa: E402
 
@@ -40,9 +40,11 @@ PAGES = (
     ("games", "Games", "gamepad"),
     ("board", "Board", "cpu"),
     ("bank", "Bank", "package"),
+    ("gts", "GTS", "globe"),
     ("controller", "Control", "joystick"),
     ("docs", "Docs", "book-open"),
 )
+PLUGINS = ("plugins", "Plugins", "plug")
 SETTINGS = ("settings", "Settings", "gear")
 UPDATE = ("update", "Update", "download")
 
@@ -76,19 +78,26 @@ def main(page: ft.Page) -> None:
         if key == "bank":
             from gui.views.bank import BankView
             return BankView(app)
+        if key == "gts":
+            from gui.views.gts import GtsView
+            return GtsView(app)
         if key == "controller":
             from gui.views.controller import ControllerView
             return ControllerView(app)
         if key == "docs":
             from gui.views.docs import DocsView
             return DocsView(app)
+        if key == "plugins":
+            from gui.views.plugins import PluginsView
+            return PluginsView(app)
         from gui.views.settings import SettingsView
         return SettingsView(app)
 
     def item(entry) -> ft.Control:
         key, label, icon = entry
         active = key == current["key"]
-        color = t.GREEN if key == "update" else t.RED if active else t.MUTED
+        fresh = key == "update" or (key == "plugins" and bool(app.plugin_updates))
+        color = t.RED if active else t.GREEN if fresh else t.MUTED
         return ft.Semantics(selected=active, button=True, label=label, exclude_semantics=True,
                             on_tap=lambda e, k=key: navigate(k), content=ft.Container(ft.Column([
             t.pixel_icon(icon, size=24, color=color),
@@ -96,11 +105,12 @@ def main(page: ft.Page) -> None:
         ], spacing=2, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
             width=56, padding=ft.Padding(0, 8, 0, 7), border_radius=12,
             bgcolor=ft.Colors.with_opacity(0.12, t.RED) if active else None,
-            on_click=lambda e, k=key: navigate(k), tooltip=label))
+            on_click=lambda e, k=key: navigate(k),
+            tooltip="Plugin updates" if key == "plugins" and app.plugin_updates else label))
 
     def render_rail() -> None:
         rail.controls = [item(p) for p in PAGES]
-        bottom.controls = [item(UPDATE)] * bool(app.update) + [item(SETTINGS)]
+        bottom.controls = [item(UPDATE)] * bool(app.update) + [item(PLUGINS), item(SETTINGS)]
 
     def navigate(key: str, **kwargs) -> None:
         if key == "update":
@@ -138,15 +148,21 @@ def main(page: ft.Page) -> None:
         welcome(app)
     elif outcome:
         updated_notice(app, outcome)
+    elif app.plugin_stopped:
+        plugin_stopped_notice(app)
 
     def updated() -> None:
         render_rail()
         page.update()
     app.update_listeners.append(updated)
+    app.plugin_update_listeners.append(updated)
     if getattr(sys, "frozen", False):
         threading.Thread(target=prune_viewers, daemon=True).start()
     if app.settings.check_updates:
         app.check_update()
+        app.check_plugin_updates()
+    from gui.views.gts import resume
+    resume(app)      # a listing or an offer left open is answered while the app runs
 
 
 def prune_viewers() -> None:
@@ -159,7 +175,9 @@ def prune_viewers() -> None:
 def offer_update(app: App) -> None:
     """A newer release on GitHub: installed in place when this copy can replace itself, else its file."""
     release = app.update
-    reason = update.blocker(update.install_root()) if release.installable else "manual"
+    root = update.install_root()
+    reason = update.blocker(root) if release.installable else "manual"
+    admin = not reason and update.needs_admin(root)
 
     def close(e):
         app.page.pop_dialog()
@@ -176,7 +194,7 @@ def offer_update(app: App) -> None:
             note.update()
             return
         app.page.pop_dialog()
-        install_update(app, release)
+        install_update(app, release, admin)
 
     note = t.text(f"You have {__version__}. "
                   + ("pokeldn downloads it, checks it and restarts in the new version. " if not reason else
@@ -184,6 +202,7 @@ def offer_update(app: App) -> None:
                      "Download the new version for your computer from the release page, then replace this app "
                      "with it. ")
                   + (f"{reason} " if reason and reason != "manual" else "")
+                  + (f"Windows asks for permission to change {root.parent}. " if admin else "")
                   + "Your settings, keys and received Pokemon stay where they are.", 13, t.MUTED)
     main = (t.button("Update now", install, "download") if not reason else
             t.button("Download", open_(release.download), "download"))
@@ -197,7 +216,7 @@ def offer_update(app: App) -> None:
     app.page.update()   # also shown from a background check, where Flet does not flush on its own
 
 
-def install_update(app: App, release: update.Release) -> None:
+def install_update(app: App, release: update.Release, admin: bool = False) -> None:
     """Downloads and checks the release, then quits so the new app can take this one's place."""
     stop = threading.Event()
     status = t.text("Downloading...", 13, t.MUTED)
@@ -253,7 +272,7 @@ def install_update(app: App, release: update.Release) -> None:
             new = update.prepare(release, progress, stop.is_set)
             if stop.is_set():
                 raise update.Cancelled
-            update.start_swap(new, root, release.version)
+            update.start_swap(new, root, release.version, admin=admin)
             # This window stays until the helper's own is up, so one is always on screen.
             update.wait_for(update.READY.exists, 15.0)
         except update.Cancelled:
@@ -274,13 +293,18 @@ def updated_notice(app: App, outcome: dict) -> None:
     if not error and version == __version__:
         app.page.show_dialog(ft.SnackBar(ft.Text(f"pokeldn updated to {__version__}"), duration=4000))
         return
-    app.page.show_dialog(t.dialog(
-        semantics_label="Update failed",
-        title=t.text("The update did not install", 17, weight=ft.FontWeight.W_600),
-        content=ft.Container(t.text(f"pokeldn {version} could not replace this app: "
-                                    f"{error or 'it opened the old version'}. This app is unchanged.",
-                                    13, t.MUTED), width=460),
-        actions=[t.button("Close", lambda e: app.page.pop_dialog())]))
+    popup.acknowledge("The update did not install",
+                      f"pokeldn {version} could not replace this app: {error or 'it opened the old version'}. "
+                      "This app is unchanged.", id="update-failed", label="Close", tone="error")
+
+
+def plugin_stopped_notice(app: App) -> None:
+    """A plugin froze or closed the app last time while it started; App turned it off."""
+    popup.confirm("A plugin was turned off",
+                  f"pokeldn closed or stopped answering last time while starting the plugin {app.plugin_stopped}. "
+                  "It is off now; turn it on again on the Plugins page once its author has a fix.",
+                  "Open Plugins", "Not now", id="plugin-stopped", tone="warning",
+                  on_agree=lambda: app.ui(lambda: app.navigate("plugins")))
 
 
 def welcome(app: App) -> None:

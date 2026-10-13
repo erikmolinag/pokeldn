@@ -1,16 +1,21 @@
-# pokeldn 0.18.3
+# pokeldn 0.22.2
 
 This desktop app trades with seven Pokemon game families on a Switch or Switch 2
 through an ESP32 radio connected by USB. Nothing is installed on the console.
 
 ## What is new
 
-- Controller board: the Board and Control pages no longer stay on "Checking..." after the controller
-  board is unplugged from the Switch while connected. Every Bluetooth request now has a time limit;
-  past it the app drops the link, looks for the board again and offers Check again.
+- Online trades verify incoming messages, keep the partner's identity fixed, and limit incoming
+  work. A rejected replacement Pokemon clears the previous offer and confirmation.
+- Plugin packages reject unsafe file paths and changes made after the install preview.
+- Sprite downloads reject malformed images and limit image decoding.
+- App updates and raid-event downloads check archive paths, links, file counts and unpacked size.
+  Downloads enforce size and time limits; app and firmware updates check their release source.
 
-The radio firmware is unchanged at 1.6.1; wireless boards need no update. The controller firmware is
-1.2.0; the Board page offers the update.
+Existing GTS listings continue to work; no relisting is needed.
+
+The radio firmware is unchanged at 1.6.1 and the controller firmware at 1.3.0; no board needs an
+update.
 
 pokeldn is an unofficial fan project, not affiliated with Nintendo or The Pokemon Company. It is not
 meant for commercial or promotional use; see the License section of the README.
@@ -27,8 +32,7 @@ Each app includes PKHeX.Core and firmware for classic ESP32, ESP32-S3, ESP32-C3 
 and ESP-IDF are bundled or unnecessary for running the app. Supply your own `prod.keys`.
 The separate `pokeldn-radio*.bin` (wireless) and `pokeldn-pad*.bin` (controller) files are merged
 firmware images for manual flashing at address `0x0`; the app selects the right image for the
-connected chip. `pokeldn-pad.bin`, the classic ESP32 controller over Bluetooth, is untested on a
-console. `SHA256SUMS` covers all nine downloads.
+connected chip. `SHA256SUMS` covers all nine downloads.
 
 ## First run
 
@@ -56,7 +60,8 @@ Received Pokemon are saved in `Documents/pokeldn/Received`, with a configurable 
 - Mystery Gift: FireRed/LeafGreen and Sword/Shield.
 - Tera Raids in both roles: Scarlet/Violet.
 - Legal Pokemon preparation with PKHeX.Core, board detection and flashing, and session recordings.
-- An ESP32-S3 as a wired Switch controller, with macros.
+- An ESP32-S3 as a wired Switch controller or a classic ESP32 as a Bluetooth one, with macros.
+- Online trade over public relays, and a GTS for banked Pokemon.
 
 ## Platform notes
 

@@ -18,11 +18,16 @@ class Settings:
     keys: str = str(Path.home() / ".switch" / "prod.keys")
     received: str = str(RECEIVED)
     radio_port: str = ""
+    radio: str = ""         # a plugin radio's scheme (pokeldn.plugins); empty: the board
+    plugins: list = field(default_factory=list)   # plugin ids turned on
     baud: int = 921600
     capture: bool = True
     board_trace: bool = False
     sprites: bool = True    # download Pokemon sprites from PokeAPI; the cache is read either way
     check_updates: bool = True   # ask GitHub for a newer release at launch
+    # "empty" or "made": what the bank and the builder put in a HOME tracker HOME never issued (docs/gui.md,
+    # The bank); pokeldn.pokemon.Service sends it with every request.
+    home_tracker: str = "empty"
     # Trainer used for generated encounters.
     ot: str = "POKELDN"
     tid: int = field(default_factory=lambda: random.randint(1, 65535))   # FireRed/LeafGreen, as shown
@@ -30,6 +35,9 @@ class Settings:
     switch_tid: int | None = None   # the Switch titles' six-digit ID, as shown; None: the one tid/sid make
     switch_sid: int | None = None
     language: int = 2
+    # 0 male, 1 female. Legends Z-A checks it before taking a Pokemon back as its trainer's, and Legends
+    # Arceus's data exchange record carries it.
+    gender: int = 0
     board_names: dict = field(default_factory=dict)   # MAC -> name the user gave the board
     tool_values: dict = field(default_factory=dict)   # tool key -> {"values": {...}, "extra": {...}}
 
@@ -64,7 +72,7 @@ class Settings:
 
     def trainer(self, game: str) -> dict:
         tid, sid = self.ids(game)
-        return {"ot": self.name(game), "tid": tid, "sid": sid, "language": self.language, "gender": 0}
+        return {"ot": self.name(game), "tid": tid, "sid": sid, "language": self.language, "gender": self.gender}
 
 
 def switch_ids_valid(tid: int, sid: int) -> bool:

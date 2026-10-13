@@ -125,7 +125,8 @@ class PokemonPicker:
                                             self.value.get("nickname", ""), VERSIONS.get(self.version, ""),
                                             self.value.get("options"))
                 self.value.update(file=info["file"], summary=builder.summary(info), legal=info["legal"],
-                                  encounter=info["encounter"], moves=info["moves"])
+                                  encounter=info["encounter"], moves=info["moves"],
+                                  home_tracker=info.get("home_tracker", ""))
                 self.on_change(dict(self.value))
                 done = self._show_result
             except Exception as exc:
@@ -170,7 +171,7 @@ class PokemonPicker:
             return
         self.value.update(file=info["file"], summary=builder.summary(info), legal=info["legal"],
                           encounter=info["encounter"], moves=info["moves"],
-                          report="" if info["legal"] else info["report"],
+                          report="" if info["legal"] else info["report"], home_tracker=info.get("home_tracker", ""),
                           species=info["species_id"], shiny=info["shiny"])
         if self.species.options:
             self.species.value = str(info["species_id"])
@@ -249,7 +250,7 @@ class PokemonPicker:
             submit(None)
 
     def _apply_set(self, found: dict, notes: list[str]) -> None:
-        for key in ("file", "summary", "legal", "encounter", "moves", "report"):
+        for key in ("file", "summary", "legal", "encounter", "moves", "report", "home_tracker"):
             self.value.pop(key, None)
         self.value.update(species=found["species_id"], level=str(found["level"]), shiny=found["shiny"],
                           nickname=found["nickname"])
@@ -289,6 +290,8 @@ class PokemonPicker:
         detail = " · ".join(x for x in (self.value.get("encounter", ""), ", ".join(self.value.get("moves", []))) if x)
         if detail:
             lines.append(t.text(detail, 12, t.MUTED))
+        if warning := builder.HOME_TRACKER_WARNINGS.get(self.value.get("home_tracker", "")):
+            lines.append(t.badge(warning, t.AMBER, "warning-diamond"))
         if self.value.get("report"):
             lines.append(t.text(self.value["report"], 12, t.RED, selectable=True))
         self.result.content = ft.Column(lines, spacing=4)
@@ -428,7 +431,8 @@ ANY = "-"
 
 
 class OfferOptions:
-    """Nature, ability, gender, held item, ball, IVs and effort for the built Pokemon, folded under the form.
+    """Nature, ability, gender, held item, ball, friendship, IVs and effort for the built Pokemon, folded under the
+    form.
 
     The choices offered are the ones PKHeX permits for the species (services/pkhex Options); the build is
     still checked for legality as a whole."""
@@ -523,7 +527,8 @@ class OfferOptions:
         if found["gendered"]:
             first.append(t.labeled_control("Gender", self._choice(
                 "gender", [{"id": int(k), "name": n} for k, n in GENDERS]), expand=True))
-        second = [t.labeled_control("Ball", self._choice("ball", found["balls"]), expand=True)]
+        second = [t.labeled_control("Ball", self._choice("ball", found["balls"]), expand=True),
+                  t.labeled_control("Friendship (0-255)", self._number("friendship", 255), width=130)]
         if found["held"]:
             second.insert(0, t.labeled_control("Held item", self._choice("held_item", found["held"], search=True),
                                                expand=True))
@@ -580,21 +585,31 @@ class OfferOptions:
         return ft.Column([t.text("Moves (empty means the encounter's own)", 12, t.MUTED),
                           ft.Row(boxes[:2], spacing=6), ft.Row(boxes[2:], spacing=6)], spacing=4)
 
+    def _number(self, key: str, top: int) -> ft.TextField:
+        def changed(e):
+            raw = e.control.value.strip()
+            if raw.isdigit() and int(raw) <= top:
+                self.chosen[key] = int(raw)
+            else:
+                self.chosen.pop(key, None)
+            t.mark_invalid(e.control, bool(raw) and key not in self.chosen)
+            self._label()
+            self.control.update()
+        current = self.chosen.get(key)
+        return t.field(value="" if current is None else str(current), hint="-", mono=True, digits=True,
+                       limit=len(str(top)), on_change=changed)
+
     def _stats(self, group: str, title: str, top: int, limit: str, total: int | None = None) -> ft.Control:
         values = self.chosen.setdefault(group, {})
         boxes = []
 
         def changed(e, stat):
             raw = e.control.value.strip()
-            if not raw:
-                values.pop(stat, None)
-                e.control.error = None
-            elif raw.isdigit() and int(raw) <= top:
+            if raw.isdigit() and int(raw) <= top:
                 values[stat] = int(raw)
-                e.control.error = None
             else:
                 values.pop(stat, None)
-                e.control.error = ""
+            t.mark_invalid(e.control, bool(raw) and stat not in values)
             if not values:
                 self.chosen.pop(group, None)
             else:

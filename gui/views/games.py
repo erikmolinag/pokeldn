@@ -3,17 +3,24 @@ import shlex
 import threading
 import time
 
+from pathlib import Path
+
 import flet as ft
 
 from gui import board
 from gui.app import keys_found
 from pokeldn import pokemon as builder
-from pokeldn.app import bank, command, gift_builder, online, received, runner
+from pokeldn.app import bank, command, events_gallery, gift_builder, online, received, runner
+from pokeldn.sv import raid_event as raid_events
 from gui import theme as t
-from pokeldn.app.catalog import GAMES, Field, Game, Tool
+from pokeldn import plugins
+from pokeldn.app.catalog import Field, Game, Tool
 from pokeldn.app.introspect import flags_of
 from pokeldn.app.paths import SESSION
+from gui.views.event_gifts import EventGiftPicker
 from gui.views.pokemon import NAME_LISTS, LinkCodePicker, NamePicker, OfferQueue, PokemonPicker
+from gui.views.raid_event import FOLDED, RaidEventPicker
+from gui.views.raid_partners import RaidPartnersPicker
 from gui.views.raid_seed import RaidSeedPicker
 from gui.views.rewards import RewardPicker
 from gui.views.gifts import GiftBuilder
@@ -22,18 +29,27 @@ from gui.views.widgets import CodeBlock, DigitCode, Log, PathField, open_folder
 
 TOOL_ICONS = {"Trade": "arrows-horizontal", "Mystery Gift": "gift", "Tera Raid": "diamond-gem"}
 EMPTY = "-"   # a dropdown option cannot carry an empty key
+# The Tera Raid host's event fields (pokeldn/app/catalog.py) and the context fields an event narrows.
+RAID_EVENT, RAID_DEN, RAID_CATCH = "--raid-event", "--raid-event-group", "--raid-catch-normal"
+RAID_CONTEXT = {"--raid-version": ("version", "violet"), "--raid-map": ("map_name", "paldea"),
+                "--raid-progress": ("progress", "4star"), "--raid-content": ("content", "standard")}
 ADVANCED_NOTE = ("The tested defaults work for most players. Change these only when a guide or a bug report "
                  "asks you to. A value set here overrides the Basic tab.")
 
 
 def tool_icon(tool: Tool):
+    if plugins.owner(tool.key):
+        return "plug"
     if tool.key.endswith("-online"):
         return "globe"
-    return TOOL_ICONS.get(tool.name.split(" (")[0], "arrows-horizontal")
+    # "Trade (Host)" and "Mystery Gift - Simulated" take their kind's icon.
+    return TOOL_ICONS.get(tool.name.split(" (")[0].split(" - ")[0], "arrows-horizontal")
 
 
 def tool_role(tool: Tool) -> str:
-    """Who looks for whom, said from the console's side."""
+    """Who looks for whom, said from the console's side; a plugin's tool names its plugin."""
+    if owner := plugins.owner(tool.key):
+        return f"From the plugin {owner.name}"
     if tool.key.endswith("-host"):
         return "Your console joins pokeldn"
     if tool.key.endswith("-join"):
@@ -46,12 +62,26 @@ def tool_role(tool: Tool) -> str:
 class GamesView:
     def __init__(self, app):
         self.app = app
-        self.game: Game = GAMES[0]
+        self.catalog = plugins.games()   # the catalog with the enabled plugins' tools
+        self.generation = plugins.generation
+        self.game: Game = self.catalog[0]
         self.tool: Tool = self.game.tools[0]
         self.tab = "basic"
         self.search = ""
         self.sprites: dict[str, Sprite] = {}   # a species field's key -> the sprite on its card
         self.visible = False
+        # The Tera Raid host's Raid event card is unfolded while its event is in use (show_raid_event).
+        self.raid_event_open = False
+        # Its Raid NPC partners card only folds: the choice stays in force (show_raid_partners). The
+        # width its cards last had lets a redraw start on the columns that fit.
+        self.raid_partners_open = False
+        self.raid_partners_width = 0
+        self.raid_partners = None              # the card shown, whose level follows Our Pokemon
+        self.locks = []                        # (field, switch, note) the chosen gift can lock (command.locked)
+        # The override of a boss a save catches once starts unchecked at every launch.
+        for stored in app.settings.tool_values.values():
+            stored.get("values", {}).pop(RAID_CATCH, None)
+            self.raid_event_open = self.raid_event_open or bool(stored.get("values", {}).get(RAID_EVENT))
         self.tree = ft.ListView(spacing=2, padding=ft.Padding(8, 8, 8, 8), expand=True)
         self.summary = t.text("", 12, t.MUTED, text_align=ft.TextAlign.CENTER)
         self.cards = ft.Column(spacing=t.GAP)
@@ -77,7 +107,12 @@ class GamesView:
     def enter(self, game: str = "", tool: str = "", **_) -> None:
         """`game` and `tool` are catalog keys: the bank opens the trade it queued a Pokemon for."""
         self.visible = True
-        chosen = next(((g, x) for g in GAMES for x in g.tools if g.key == game and x.key == tool), None)
+        if self.generation != plugins.generation:     # a plugin was turned on, off, added or removed
+            self.generation, self.catalog = plugins.generation, plugins.games()
+            game_now = next((g for g in self.catalog if g.key == self.game.key), self.catalog[0])
+            tool_now = next((x for x in game_now.tools if x.key == self.tool.key), game_now.tools[0])
+            self.app.ui(lambda: self.select(game_now, tool_now))
+        chosen = next(((g, x) for g in self.catalog for x in g.tools if g.key == game and x.key == tool), None)
         if chosen:   # once the view is back on the page: a list rebuilt off it shows empty
             self.app.ui(lambda: self.select(*chosen))
         self.session.refresh(update=False)
@@ -105,20 +140,122 @@ class GamesView:
         if rebuild:
             self.render_body()
             self.cards.update()
+        elif field.kind == "pokemon" and self.raid_partners:
+            self.raid_partners.follow_host()
+        elif field.events:
+            self.follow_locks()
         self.session.refresh()
 
-    def set_raid_context(self, context: dict[str, str]) -> None:
-        """The raid finder's choice brings its version, region, progress and crystal with it."""
-        self.values.update({
-            "--raid-version": context["version"],
-            "--raid-map": context["map_name"],
-            "--raid-progress": context["progress"],
-            "--raid-content": context["content"],
-        })
+    def switched(self, field: Field, on: bool) -> None:
+        """A switch redraws the cards only when another field shows, hides or changes with it: a redraw reads
+        a Mystery Gift card's gift list again. A Shiny switch turns the sprites in place."""
+        drives = any(field.key in (f.unless, f.requires) or f.when[:1] == (field.key,) for f in self.tool.fields)
+        self.set_value(field, on, rebuild=drives)
+        if field.shiny and not drives:
+            for f in self.tool.fields:
+                if f.key in self.sprites:
+                    species = str(command.value_of(f, self.values) or "")
+                    self.sprites[f.key].show(int(species) if species.isdigit() else 0, self.shiny())
+
+    def follow_locks(self) -> None:
+        """The switches the chosen Mystery Gift Pokemon locks follow it without a redraw, which would read the
+        gift list again: off and disabled, their note saying why, while it has its own trainer."""
+        for field, control, note in self.locks:
+            why = command.locked(field, self.tool, self.values)
+            control.value = bool(command.value_of(field, self.values)) and not why
+            control.disabled, control.opacity = bool(why), 0.45 if why else 1.0
+            note.value = self.description(field)
+            for shown in (control, note):
+                try:
+                    shown.update()
+                except RuntimeError:    # the card was redrawn away
+                    pass
+
+    def redraw(self) -> None:
+        """Saves the values and redraws the cards and the session on them."""
         self.app.settings.save()
         self.render_body()
         self.cards.update()
         self.session.refresh()
+
+    def set_raid_context(self, context: dict) -> None:
+        """The raid finder's choice brings its version, region, progress and crystal with it; an
+        event raid's, its den's delivery group in place of the crystal."""
+        self.values.update({
+            "--raid-version": context["version"],
+            "--raid-map": context["map_name"],
+            "--raid-progress": context["progress"],
+        })
+        if "event" in context:
+            self.values[RAID_DEN] = str(context["group"])
+        else:
+            self.values["--raid-content"] = context["content"]
+        self.redraw()
+
+    # Event raids
+
+    def show_raid_event(self, unfolded: bool) -> None:
+        """Unfolds or folds the Raid event card. Folding sets its event aside, and the raid, its finder
+        and the command are a standard raid's; unfolding brings the event back."""
+        self.raid_event_open = unfolded
+        if unfolded and not self.values.get(RAID_EVENT) and self.values.get(FOLDED):
+            self.values[RAID_EVENT] = self.values.pop(FOLDED)
+        elif not unfolded and self.values.get(RAID_EVENT):
+            self.values[FOLDED] = self.values.pop(RAID_EVENT)
+        self.redraw()
+
+    # NPC partners
+
+    def show_raid_partners(self, unfolded: bool) -> None:
+        """Unfolds or folds the Raid NPC partners card; its choice goes to the raid either way."""
+        self.raid_partners_open = unfolded
+        self.redraw()
+
+    def raid_event(self):
+        """-> the event the Raid event card chose, or None: none chosen, folded, or not in the gallery."""
+        key = self.values.get(RAID_EVENT)
+        if not key:
+            return None
+        try:
+            return events_gallery.load(key)
+        except (OSError, ValueError):
+            return None
+
+    def raid_context(self) -> dict:
+        """-> the raid the tool's fields describe; an event's carries the event, its group and den."""
+        context = {name: str(self.values.get(key, default)) for key, (name, default) in RAID_CONTEXT.items()}
+        event = self.raid_event()
+        if event is None:
+            return context
+        context = raid_events.constrain(event, {**context, "group": self.values.get(RAID_DEN)})
+        den = next(d for d in raid_events.dens(event, context["version"]) if d.group == context["group"])
+        return {**context, "event": event, "den": den.label}
+
+    def constrain_raid(self) -> None:
+        """Keeps the stored version, region, progress and den ones the chosen event spawns."""
+        if self.raid_event() is None:
+            return
+        context = self.raid_context()
+        wanted = {"--raid-version": context["version"], "--raid-map": context["map_name"],
+                  "--raid-progress": context["progress"], RAID_DEN: str(context["group"])}
+        if any(self.values.get(key) != value for key, value in wanted.items()):
+            self.values.update(wanted)
+            self.app.settings.save()
+
+    def raid_choices(self, field: Field) -> tuple | None:
+        """-> the choices of a raid context field the chosen event allows, or None to keep them all."""
+        event = self.raid_event()
+        if event is None or field.key not in ("--raid-version", "--raid-map", "--raid-progress"):
+            return None
+        context = self.raid_context()
+        allowed = {"--raid-version": raid_events.versions(event), "--raid-map": ["paldea"],
+                   "--raid-progress": raid_events.progresses(event, context["version"], context["group"])}
+        return tuple((key, label) for key, label in field.choices if key in allowed[field.key])
+
+    def gallery_changed(self) -> None:
+        """The event gallery was downloaded or updated: the card and the raid redraw on it."""
+        events_gallery.forget()
+        self.redraw()
 
     # Rendering
 
@@ -137,10 +274,10 @@ class GamesView:
 
     def render_tree(self) -> None:
         rows = []
-        for game in GAMES:
+        for game in self.catalog:
             open_ = game is self.game
             rows.append(ft.Container(ft.Row([
-                ft.Container(ft.Image(src=f"games/{game.key}.png", width=36, height=36,
+                ft.Container(ft.Image(src=Path(game.icon).read_bytes() if game.icon else f"games/{game.key}.png", width=36, height=36,
                                       fit=ft.BoxFit.CONTAIN, filter_quality=ft.FilterQuality.NONE,
                                       semantics_label=game.name),
                              width=40, height=36, alignment=ft.Alignment.CENTER),
@@ -164,6 +301,7 @@ class GamesView:
         self.tree.controls = rows
 
     def render_body(self) -> None:
+        self.raid_partners = None
         if self.tool.unavailable:
             self.tabs.visible = False
             self.cards.controls = [t.card("Not available yet", None, self.tool.unavailable)]
@@ -177,12 +315,13 @@ class GamesView:
         self.cards.update()
 
     def _open_doc(self, e) -> None:
-        self.app.navigate("docs", doc=self.tool.doc or self.game.doc)
+        self.app.navigate("docs", doc=self.tool.doc or self.game.doc or "plugins.md")
 
     # Basic tab
 
     def basic_cards(self) -> list[ft.Control]:
         cards, groups = [], {}
+        self.constrain_raid()
         for field in self.tool.fields:
             if field.hidden or not command.applies(field, self.tool, self.values):
                 continue
@@ -195,9 +334,19 @@ class GamesView:
                 cards.append(("field", field))
         out = []
         self.sprites = {}
+        self.locks = []
         for kind, item in cards:
             if kind == "field" and item.kind == "builder":
                 out.extend(GiftBuilder(self, item).cards())
+            elif kind == "field" and item.kind == "raidevent":
+                out.append(RaidEventPicker(self, item).control)
+            elif kind == "field" and item.kind == "raidpartners":
+                self.raid_partners = RaidPartnersPicker(self, item)
+                out.append(self.raid_partners.control)
+            elif kind == "field" and item.kind == "switch" and item.your_ot:
+                control, note = self.input(item), t.text(self.description(item), 12, t.MUTED)
+                self.locks.append((item, control, note))
+                out.append(t.card(item.label, note, trailing=control))
             elif kind == "field" and item.kind == "switch":
                 out.append(t.card(item.label, None, item.help, trailing=self.input(item)))
             elif kind == "field" and item.kind == "pokemon" and item.queue > 1:
@@ -247,7 +396,8 @@ class GamesView:
     def description(self, field: Field) -> str:
         selected = command.value_of(field, self.values)
         detail = dict(field.choice_help).get(selected, "") if field.kind == "choice" else ""
-        return " ".join(part for part in (field.help, detail) if part)
+        why = command.locked(field, self.tool, self.values) if field.your_ot else ""
+        return " ".join(part for part in (field.help, detail, why) if part)
 
     def offer_queue(self, field: Field) -> OfferQueue:
         return OfferQueue(self.app, self.game.key, command.value_of(field, self.values), field.queue,
@@ -256,11 +406,24 @@ class GamesView:
     def input(self, field: Field, grouped: bool = False) -> ft.Control:
         value = command.value_of(field, self.values)
         if field.kind == "switch":
-            return t.switch(bool(value), lambda e: self.set_value(field, e.control.value, rebuild=True))
+            why = command.locked(field, self.tool, self.values) if field.your_ot else ""
+            control = t.switch(bool(value) and not why, lambda e: self.switched(field, e.control.value))
+            control.disabled, control.opacity = bool(why), 0.45 if why else 1.0   # follow_locks
+            return control
         if field.kind == "choice":
-            return t.dropdown([(k or EMPTY, label) for k, label in field.choices], value or EMPTY,
-                              on_select=lambda e: self.set_value(
-                                  field, "" if e.control.value == EMPTY else e.control.value, rebuild=True))
+            choices = self.raid_choices(field) or field.choices
+            control = t.dropdown([(k or EMPTY, label) for k, label in choices], value or EMPTY,
+                                 on_select=lambda e: self.set_value(
+                                     field, "" if e.control.value == EMPTY else e.control.value, rebuild=True))
+            control.disabled = len(choices) == 1 and len(field.choices) > 1   # an event leaves one
+            return control
+        if field.kind == "raidden":
+            event, context = self.raid_event(), self.raid_context()
+            dens = raid_events.dens(event, context["version"]) if event is not None else []
+            control = t.dropdown([(str(d.group), d.label) for d in dens], str(context.get("group", "")),
+                                 on_select=lambda e: self.set_value(field, e.control.value, rebuild=True))
+            control.disabled = len(dens) == 1
+            return control
         if field.kind in NAME_LISTS:
             def picked(v):
                 self.set_value(field, v)
@@ -268,6 +431,10 @@ class GamesView:
                     self.sprites[field.key].show(int(v) if str(v).isdigit() else 0, self.shiny())
             return NamePicker(self.app, self.game.key, field.kind, value, picked,
                               optional=not field.default).control
+        if field.kind == "pokemon" and field.events:
+            first = command.offers(value)
+            return EventGiftPicker(self.app, self.game.key, first[0] if first else {},
+                                   lambda v: self.set_value(field, v)).control
         if field.kind == "pokemon" and field.queue > 1:
             return self.offer_queue(field).control
         if field.kind == "pokemon":
@@ -279,14 +446,8 @@ class GamesView:
             return RewardPicker(self.app, self.game.key, value,
                                 lambda v: self.set_value(field, v)).control
         if field.kind == "raidseed":
-            return RaidSeedPicker(self.app, value,
-                                  lambda v: self.set_value(field, v),
-                                  context=lambda: {
-                                      "version": str(self.values.get("--raid-version", "violet")),
-                                      "map_name": str(self.values.get("--raid-map", "paldea")),
-                                      "progress": str(self.values.get("--raid-progress", "4star")),
-                                      "content": str(self.values.get("--raid-content", "standard")),
-                                  }, on_context_change=self.set_raid_context).control
+            return RaidSeedPicker(self.app, value, lambda v: self.set_value(field, v),
+                                  context=self.raid_context, on_context_change=self.set_raid_context).control
         if field.kind == "linkcode":
             return LinkCodePicker(self.app, value, lambda v: self.set_value(field, v)).control
         if field.kind == "code":
@@ -506,14 +667,20 @@ class SessionPanel:
     def checklist(self) -> list[tuple[str, str, str, str]]:
         """(state, what, how to fix it, the page that fixes it) for each thing Start needs.
         state is ok, wait, warn (Start still allowed) or block."""
-        status = self.app.board_status()
-        board_state = ("ok" if status.ready else "wait" if status.state == "checking" else
-                       "block" if status.state in ("missing", "choose", "controller") else "warn")
         items = [
             ("ok", "Switch keys added", "", "") if keys_found(self.app.settings.keys) else
             ("block", "Add your Switch keys", "Choose prod.keys in Settings.", "settings"),
-            (board_state, status.title, "" if status.ready else status.detail, "board"),
         ]
+        if self.app.settings.radio:
+            radio = self.app.plugin_radio()
+            items.append(("ok", f"Radio: {radio.label}", "", "") if radio else
+                         ("block", "Radio plugin not loaded", "Turn its plugin on, or pick the board.",
+                          "plugins"))
+        else:
+            status = self.app.board_status()
+            board_state = ("ok" if status.ready else "wait" if status.state == "checking" else
+                           "block" if status.state in ("missing", "choose", "controller") else "warn")
+            items.append((board_state, status.title, "" if status.ready else status.detail, "board"))
         if missing := command.missing_offer(self.tool, self.games.values):
             hint = " Pick a species, then press Build." if missing.startswith("Build") else ""
             items.append(("block", "Pokemon to offer", missing + hint, ""))
@@ -528,7 +695,7 @@ class SessionPanel:
                            t.secondary_button("Board", lambda e: self.app.navigate("board"), "cpu")], spacing=8)
         looks = {"ok": ("checkbox-on", t.GREEN), "wait": ("refresh", t.BLUE),
                  "warn": ("warning-diamond", t.AMBER), "block": ("warning-diamond", t.RED)}
-        labels = {"settings": "Settings", "board": "Board"}
+        labels = {"settings": "Settings", "board": "Board", "plugins": "Plugins"}
         rows = []
         for state, what, how, page in items:
             icon, color = looks[state]
@@ -712,9 +879,11 @@ class SessionPanel:
             return
         if self.app.busy:
             return
-        port = self.app.radio_port()
+        radio = self.app.plugin_radio() if s.radio else None
+        port = radio.scheme if radio else "" if s.radio else self.app.radio_port()
         problems = [p for p in (
-            "" if port else "No board found. Plug it in, or pick one on the Board page.",
+            "" if port else "The radio plugin is not loaded." if s.radio else
+            "No board found. Plug it in, or pick one on the Board page.",
             "" if os.path.isfile(os.path.expanduser(s.keys)) else "Choose your prod.keys in Settings.",
             command.missing_offer(tool, self.games.values), *command.problems(tool, self.games.values)) if p]
         self.log.clear()
@@ -746,7 +915,8 @@ class SessionPanel:
         self.app.process_label = tool.name
         self.running_tool = tool
         self.app.process = runner.Process(["--run", tool.script, *args], str(SESSION),
-                                          runner.base_env(s, port, trace), self._line, self._exited)
+                                          runner.base_env(s, port, trace), self._line, self._exited,
+                                          popups=self.app.popups, label=tool.name)
         self.run = (self.app.process, stamp, self.games.game.key)
         threading.Thread(target=self._tick, daemon=True).start()
         self.refresh()

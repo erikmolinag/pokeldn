@@ -8,11 +8,12 @@ from pokeldn.sv.raid import REWARD_ROWS
 
 @dataclass(frozen=True)
 class Field:
-    flag: str | tuple[str, ...]   # "" is positional; a tuple passes the same value to each flag
+    flag: str | tuple[str, ...]   # "" is positional; a tuple passes the same value to each flag, but
+                                  # raidpartners's tuple is its picks' flag then its progress's
     label: str
     kind: str = "text"            # text number choice switch pokemon file builder multi linkcode code
-                                  # (eight digits) raidseed rewards, or a PKHeX name list: species move
-                                  # item ball
+                                  # (eight digits) raidseed rewards raidevent raidden raidpartners, or a
+                                  # PKHeX name list: species move item ball
     help: str = ""
     default: str | bool = ""
     choices: tuple[tuple[str, str], ...] = ()
@@ -23,6 +24,7 @@ class Field:
     exts: tuple[str, ...] = ()
     when: tuple[str, str] = ()    # (flag, value): the field applies only while that field has that value
     unless: str = ""             # hide and omit the field while this source field has a value
+    requires: str = ""           # hide and omit the field while this source field has no value
     template: str = ""            # the value is passed as template.format(value), e.g. "ball={}"
     limits: tuple[tuple[str, int, str], ...] = ()   # (NAME, highest, why) for NAME=VALUE text
     choice_help: tuple[tuple[str, str], ...] = ()
@@ -31,6 +33,9 @@ class Field:
     count: str = ""               # a pokemon field: the flag that carries how many there are
     hidden: bool = False          # applied with its default, set on the Advanced tab instead of Basic
     shiny: bool = False           # a switch that makes the species field's Pokemon shiny, for its sprite
+    events: bool = False          # a pokemon field picked among the game's Mystery Gift Pokemon, not built
+    your_ot: bool = False         # a switch for a gift that names its receiver: off and disabled while
+                                  # the one chosen has its own trainer (command.locked)
 
     @property
     def key(self) -> str:
@@ -61,6 +66,7 @@ class Game:
     short: str
     doc: str
     tools: tuple[Tool, ...]
+    icon: str = ""                # an image file; empty: the app's games/<key>.png
 
 
 VERSIONS = (("firered", "FireRed"), ("leafgreen", "LeafGreen"))
@@ -71,6 +77,13 @@ FRESH_PID = Field("--fresh-pid", "New PID each run", "switch", default=True, hid
                   help="Offer the Pokemon under a new PID and encryption constant, so a save that "
                        "already received it takes it again. Turn it off for a file whose PID must stay, "
                        "such as an event Pokemon.")
+FOR_RECEIVER = Field("--for-receiver", "Made for the receiving player", "switch", default=True, hidden=True,
+                     your_ot=True,
+                     help="A gift that gave its receiver's own trainer is made again during the trade for the "
+                          "console's save, read from the Pokemon the console offers or from its session data. "
+                          "Off, or when neither names the save, it goes with your trainer from Settings.")
+GIFT_OFFER_BACK = ("Offer a Pokemon you caught in this save and confirm. The event Pokemon comes over; yours goes "
+                   "to Received.")
 CHANNEL_HELP = "The wireless channel of the network pokeldn hosts."
 CODE_HELP = "The same code the player enters on the console."
 
@@ -302,7 +315,7 @@ PLA = Game("pla", "Legends Arceus", "PLA", "pla.md", (
           FRESH_PID,
           host_seconds("900")),
          fixed=("--channel", "6", "--session-update", "--sustain", "--clock", "--data-exchange",
-                "--game-channel", "--trade-box", "--player-name", "{ot}",
+                "--game-channel", "--trade-box", "--player-name", "{ot}", "--gender", "{gender}",
                 "--offer-out", "{received}/pla-{stamp}.pa8"),
          doc="pla.md"),
     Tool("pla-join", "Trade (Join)", "bin/pla_join.py",
@@ -311,7 +324,8 @@ PLA = Game("pla", "Legends Arceus", "PLA", "pla.md", (
          (queued("--offer", required=False, help=PLA_OFFER_HELP),
           Field("--code", "Link code", "code", default="00000000", help=CODE_HELP),
           FRESH_PID),
-         fixed=("--player-name", "{ot}", "--offer-out", "{received}/pla-{stamp}.pa8"),
+         fixed=("--player-name", "{ot}", "--gender", "{gender}",
+                "--offer-out", "{received}/pla-{stamp}.pa8"),
          doc="pla.md"),
 ))
 
@@ -354,12 +368,17 @@ SV = Game("sv", "Scarlet & Violet", "SV", "sv.md", (
          "Host a Tera Raid the console joins: you choose the raid, its rewards and the Pokemon we bring.",
          ("Choose the Pokemon our player brings, the raid and, if you like, its rewards.",
           "Start the host.",
-          "On the console: X, Poke Portal, Tera Raid Battle, search offline, Link Code 4970.",
+          "On each console: X, Poke Portal, Tera Raid Battle, search offline, Link Code 4970.",
+          "Press Ready on each console: the raid starts once every console is in and Ready, or "
+          "when the lobby timer runs out.",
           "Our player leaves when the battle starts; its Pokemon stays and fights at your side.",
           "A communication error may show as the battle starts: dismiss it and fight on.",
           "Win the raid to receive the rewards."),
          (Field("--raid-pokemon", "Our Pokemon", "pokemon", required=True,
                 help="The Pokemon our player brings. PKHeX checks it is legal."),
+          Field("--raid-event", "Raid event", "raidevent",
+                help="A raid from a past Poke Portal News event, from Project Pokemon's EventsGallery. "
+                     "Leave it empty, or fold this card, for a standard raid."),
           Field("--raid-version", "Game", "choice", default="violet", group="The raid",
                 choices=(("scarlet", "Scarlet"), ("violet", "Violet")),
                 help="A seed can give another raid in the other version."),
@@ -371,11 +390,24 @@ SV = Game("sv", "Scarlet & Violet", "SV", "sv.md", (
                          ("5star", "5-star raids"), ("6star", "6-star raids")),
                 help="Sets how many stars a standard crystal can have."),
           Field("--raid-content", "Crystal", "choice", default="standard", group="The raid",
-                choices=(("standard", "Standard"), ("black", "Black (6 stars)"))),
+                choices=(("standard", "Standard"), ("black", "Black (6 stars)")), unless="--raid-event"),
+          Field("--raid-event-group", "Crystal", "raidden", group="The raid", requires="--raid-event",
+                help="Each of the event's crystals has its own bosses."),
           Field("--raid-seed", "Raid seed", "raidseed", default="000F34C3", required=True,
                 group="The raid", help="Eight hexadecimal digits. Find a raid searches seeds for you."),
           Field("--raid-reward", "Rewards", "rewards",
                 help=f"Leave empty for the raid's own rewards, or list up to {REWARD_ROWS} items."),
+          Field("--raid-players", "Consoles joining", "choice", default="1",
+                choices=(("1", "1 console"), ("2", "2 consoles"), ("3", "3 consoles")),
+                help="The raid waits for this many consoles, each one Ready, before it starts."),
+          Field(("--raid-partner", "--raid-partner-progress"), "Raid NPC partners", "raidpartners",
+                help="The trainers who fill the slots no console holds: two with one console joining, "
+                     "one with two, none with three. A slot you leave unpicked gets a trainer the game "
+                     "draws."),
+          Field("--raid-catch-normal", "Catch an event boss again", "switch", hidden=True,
+                requires="--raid-event",
+                help="Offer a boss the event lets a save catch once as a normal catch, under a record "
+                     "number no save has caught. The Raid event card sets it."),
           host_seconds("600")),
          fixed=("--channel", "1", "--scene-id", "7", "--max-participants", "4", "--code", "4970",
                 "--scarlet-response", "--session-flags", "0", "--session-packet-id", "1",
@@ -423,6 +455,30 @@ ZA = Game("za", "Legends Z-A", "PLZA", "za.md", (
          doc="za.md"),
 ))
 
+def simulated_gift(game: Game, host: Tool, steps: tuple[str, ...]) -> Tool:
+    """The trade host offering one of the game's Mystery Gift Pokemon, picked from PKHeX's event table, in
+    place of a built one, and made for the receiving player where the card names them
+    (docs/gift_simulated.md)."""
+    def gift(f: Field) -> tuple[Field, ...]:
+        if f.kind != "pokemon":
+            return f,
+        return (replace(f, label="Mystery Gift Pokemon", required=True, events=True, queue=1, more="", count="",
+                        help=f"Every Pokemon gift {game.name} gave, from PKHeX's event database. The console "
+                             "receives a fresh legal copy by trade."),
+                FOR_RECEIVER)
+    return Tool(host.key.replace("-host", "-gift-host"), "Mystery Gift - Simulated", host.script,
+                "Trade an official Mystery Gift Pokemon to the console: a fresh legal copy, as your trainer "
+                "received it.", steps, tuple(g for f in host.fields for g in gift(f)), fixed=host.fixed,
+                doc="gift_simulated.md")
+
+
+def with_gift(game: Game, steps: tuple[str, ...]) -> Game:
+    """`game` with its Mystery Gift - Simulated after its trades, made from its trade host."""
+    host = next(t for t in game.tools if t.name == "Trade (Host)")
+    at = max(n for n, t in enumerate(game.tools) if t.name.startswith("Trade (")) + 1
+    return replace(game, tools=game.tools[:at] + (simulated_gift(game, host, steps),) + game.tools[at:])
+
+
 def with_online(game: Game, steps: tuple[str, ...], code: Field | None = None) -> Game:
     """`game` with its online trade after its local trades; `code` replaces the host's own code field's
     help, or is a new field where the game has no code."""
@@ -441,17 +497,29 @@ GAMES = (
                        "Your partner's party shows on the right: choose the Pokemon you send, then "
                        "confirm."),
                 Field("--online-code", "Code", "code", help=ONLINE_CODE_HELP)),
-    with_online(LGPE, (LGPE_STEPS, "Choose a Pokemon and confirm.")),
+    with_online(with_gift(LGPE, ("Choose the event Pokemon, then start the host.", LGPE_STEPS, GIFT_OFFER_BACK)),
+                (LGPE_STEPS, "Choose a Pokemon and confirm.")),
     with_online(SWSH, ("Y-Comm, Link Trade, local communication with the same Link Code; press A on "
                        "both messages, then wait in the overworld.",
                        "Choose the Pokemon to send when POKELDN appears.")),
-    with_online(BDSP, (f"{BDSP_ROOM} Our character appears.",
-                       "Y, Communicate, Trade Pokemon; accept the greeting, then choose."),
+    with_online(with_gift(BDSP, ("Choose the event Pokemon, then start the host before the player enters the "
+                                 "room.", f"{BDSP_ROOM} Our character appears.",
+                                 "Y, Communicate, Trade Pokemon; accept the greeting.", GIFT_OFFER_BACK)),
+                (f"{BDSP_ROOM} Our character appears.",
+                 "Y, Communicate, Trade Pokemon; accept the greeting, then choose."),
                 Field("--password", "Code", "code", help="Eight digits you and your partner agree "
                       "on; you also enter them at the Union Room's password prompt. Empty: the "
                       "plain room, and anyone trading online without a code.")),
-    with_online(PLA, (*PLA_STEPS, "Offer a Pokemon and confirm.")),
-    with_online(SV, (SV_SEARCH, "Offer and confirm on the trade screen.")),
-    with_online(ZA, ("X, Link Play, Link Trade, Nearby Players, the same code, then search.",
-                     "Pick on the trade box, offer, then trade.")),
+    with_online(with_gift(PLA, ("Choose the event Pokemon, then start the host.", *PLA_STEPS, GIFT_OFFER_BACK,
+                                "Leave the host running until the trade ends: an interrupted trade locks trading "
+                                "for a while.")),
+                (*PLA_STEPS, "Offer a Pokemon and confirm.")),
+    with_online(with_gift(SV, ("Choose the event Pokemon, then start the host.", SV_SEARCH, GIFT_OFFER_BACK)),
+                (SV_SEARCH, "Offer and confirm on the trade screen.")),
+    with_online(with_gift(ZA, ("Choose the event Pokemon, then start the host.",
+                               "X, Link Play, Link Trade, Nearby Players, the same code, then search.",
+                               "Pick a Pokemon you caught in this save on the trade box, then trade. The event "
+                               "Pokemon comes over; yours goes to Received.", "Back out with B after the trade.")),
+                ("X, Link Play, Link Trade, Nearby Players, the same code, then search.",
+                 "Pick on the trade box, offer, then trade.")),
 )

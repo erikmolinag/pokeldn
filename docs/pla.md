@@ -455,7 +455,43 @@ Error 7 at the 10.2 s timeout.
 
 A 0x81 message addressed to the peer's variable id in the header never reaches the game. The 64-byte
 content payload is identical in both directions of a same-save pair except for the sender's station
-index; which bytes are per-player is unknown.
+index. It is zlib (4 KB window, level 5) of a 139-byte record (`pokeldn.pla.data_exchange`): one
+chunk under Pia's StreamData header
+([Protocol 0x81](pia.md#protocol-0x81-the-stream-broadcast-reliable-transfer-pia-6)), holding the
+save's 0x80-byte MyStatus block (PKHeX `MyStatus8a`):
+
+    +0x00  1   StreamData kind, 1: the first chunk
+    +0x01  1   transfer id, 0
+    +0x02  1   percent of the block delivered, 0x64
+    +0x03  4   zero
+    +0x07  4   big-endian u32 0x80, the bytes that follow
+    +0x0b  128 the MyStatus block: trainer id pair +0x1b, version +0x1f (47), gender +0x20,
+               language +0x22, UTF-16LE name +0x2b
+
+Pia writes the header (serializer `0x7533e8`, chunk loop `0x7529f8`); the game hands over the block
+alone, `0x753554(stream, exchange + 0xa0, 0x80, 0)` at `0x26bfd28`, after `0x26c564c` copies it whole
+from the step's own copy (`0x1024038`, the block's own serializer: the block sits at `+0x68` of its
+object). A gift made for the receiving player reads the console's trainer
+(`data_exchange.read_trainer`, [Made for the receiving player](gift_simulated.md#made-for-the-receiving-player)).
+
+In the reference record, the block's two other non-zero fields are 32-bit; a retail save's record
+also carries a 22-character account identifier at record +0x60 and a 1 at record +0x7d:
+
+- +0x3c (record +0x47) is the look the player picked from the intro's 4x2 `grid_player`, column +
+  4 x row (`0x1348df8`, setter `0x1023f94`). The same pick sets the gender, female for columns 2 and
+  3 (`column > 1`, `0x134d728`), and the skin. The eight values are `p1skin001` (0), `p1skin004`
+  (1), `p2skin001` (2), `p2skin004` (3), `p1skin002` (4), `p1skin003` (5), `p2skin002` (6) and
+  `p2skin003` (7), `p1` the male player and `p2` the female. The game reads it back (`0x1023f9c`)
+  for the player's picture, `photo_player_0N`, and the end credits, `credit_end_0N`. The
+  reference's 5 is the male player with the third skin; a look whose column disagrees with the
+  gender at +0x15 (record +0x20) is one no save produces. `bin/pla_host.py` and `bin/pla_join.py`
+  send the reference record with the gender `--gender` gives, the app's from Settings, and the look
+  of the same skin for it: 5 male, 7 female (`data_exchange.build_record`).
+- +0x50 (record +0x5b, PKHeX's `Unk_0x50`) is 1, written by the block's initializer (`0x1023144` in
+  `0x10230e4`, which also writes version 47). The class has no accessor for it.
+
+Game Freak hashes these names with FNV-1a 64 from offset basis `0xcbf29ce484222645`: the skins match
+the eight hashes `0x1348cbc` keys on, and `grid_player` the layout `0x13497fc` opens.
 
 ## The game's reliable channel
 
@@ -820,6 +856,16 @@ The registration `0x1024d5c` (slot `0x40f2098`) binds three fields to save block
 
 PKHeX's `BlankBlocks8a.cs` agrees on the sizes. In saves `0x96993D83` is type 11 and 0,
 `0xAFA034A5` a false bool, `0x24E0D195` a zero flag byte then the record most recently traded in.
+
+The byte at `+0x78` marks a received record not yet placed. `0x10251c8` sets it (`0x102520c`), copies
+the record to `+0x79` and, when given one, the record's post-trade form to `+0x1f1` (flag `+0x369`).
+Its one caller is executor vf `+0x58` at job state 6 (`0x26ddc64`), which passes no post-trade form
+when `0x2b5be48` returns the same species for both. `0x26dcc74` reads the byte (`0x102527c` at
+`0x26dccfc`); when set, it places the record (`0x10325a0`), registers it in the dex (`0x10342b0`),
+clears the byte (`0x1025268` at `0x26dcdc8`) and saves with request kind 3. The cancel clears it
+(`0x26dd70c`) only with `[executor+0xb0]` set. `0x26dcc74` runs at mode 5 step 10 (`0x110accc`),
+at mode 9 step 0 (`0x110bc88`) and from the box code (`0xc17ce0`, `0xc17e8c`). No other site
+stores to the byte.
 Every writer of the count (whole-text call index; no pointer slot holds a method):
 
 | site | caller | value | when |
@@ -1291,6 +1337,27 @@ station (`0x735b90`). The type-4 handler `0x738280` sets the job's done flag `[j
 With the type-4 answer the first type 3 comes within 0.15 s of the player confirming the quit
 (BOOT-marked, two departures) and the field is back on screen 3.70 s after the confirmation.
 
+After a quit the trade scene holds "Communicating. Please stand by..." (`msg_ui_box_p2ptrd_09`) for
+at least 3.0 s. The player's quit (`0x110bd50`, from the yes/no at `0x110b970`), the partner-gone
+message (`0x110c9bc`) and a session error (`0x110b504`) all enter mode 9 (`0x110b72c`, steps
+`[scene+0xb4]`, table `0x3979c98`). Step 0 runs `0x26dcc74`, which saves (`0x10457e4`, request kind
+3) only when `[[[0x4279560]+0x2b8]+0x78]`, the pending received record
+([The trade restriction](#the-trade-restriction)), is set. Step 1 starts a stopwatch on
+`nn::os::GetSystemTick` at `[scene+0x278]`, starts the leave (`0x26be890`) and cancels the trade
+job (`0x26d9e90`). Step 2 waits until 3.0 s have passed (`fmov d1,#3.0` at `0x110b7d8`), the leave
+sequence is done (`0x26bdc94`) and the job is gone (`0x26d9cf0`), then closes the message; step 3
+returns true once it has closed. A leave answered at once (0.05 s) and one answered by no host
+(2.0 s) both end inside the 3.0 s, so the host's answer does not move the field. One retail departure
+with the type-4 answer measured 3.77 s from the console's type 3 to the field.
+An emulated Arceus 1.1.1 hosting its own search, quitting with one station seated, reached step 1
+(`0x110b78c`) and passed step 2 (`0x110b81c`) 4.33 s later, 0.43 s after its last packet: the host
+migration it hands the station (type 7) outlasts the 3.0 s floor. Step 3 (`0x110b80c`) followed
+0.03 s later and the scene's destructor (`0x110bec0`) 0.33 s after step 2.
+An emulated Arceus 1.1.1 seated as the station of `bin/pla_host.py`, quitting from the box, reached
+step 1 and sent its type 3 within 0.07 s (answered at once), passed step 2 3.03 s after step 1, step 3
+0.03 s later and the destructor 0.33 s after step 2: with the leave done inside the floor, step 2
+waits out the 3.0 s alone.
+
 No timer inside Pia precedes the first type 3 ([pia.md](pia.md), Leaving a session). The only
 caller of `Session::LeaveAsync` is the game's leave request, update `0x2ca0a10` (vtable `0x4198ef8`,
 state `[req+0x88]`, jump table `0x3985448`): its first update calls `LeaveAsync` (`0x2ca0ac0`)
@@ -1321,4 +1388,6 @@ console leaves.
 
 ## Unresolved
 
-- What the console does in the 3.6 s between leaving the network and showing the field.
+- What fills the 0.4 s between the destructor (3.36 s after step 1 on an emulated station) and the
+  field on screen (3.77 s after the type 3 on retail); the emulator gives no field marker.
+- Which flows of the box code call `0x26dcc74` (`0xc17ce0`, `0xc17e8c`).

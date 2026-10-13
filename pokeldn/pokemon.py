@@ -4,6 +4,7 @@ import glob
 import json
 import os
 import re
+import queue
 import subprocess
 import sys
 import threading
@@ -20,6 +21,10 @@ EXE = "pokeldn-pkhex.exe" if sys.platform == "win32" else "pokeldn-pkhex"
 EXTENSIONS = {"frlg": "pk3", "lgpe": "pb7", "bdsp": "pb8", "swsh": "pk8", "pla": "pa8", "sv": "pk9",
               "za": "pa9"}
 ZA_OFFER_HEADER = bytes.fromhex("0101b90300bc815801")   # SelectPokemon, round 0 (docs/za.md)
+RECORD_SIZES = {"frlg": (80, 100), "lgpe": (232, 260), "bdsp": (328, 344),
+                "swsh": (328, 344), "pla": (360, 376), "sv": (328, 344), "za": (328, 344)}
+CHECK_TIMEOUT = 10.0
+RECORD_LIMIT = 768
 
 
 class BuilderError(Exception):
@@ -45,8 +50,11 @@ class Service:
         self.lock = threading.Lock()
         self.proc = None
         self.species_cache: dict[str, list[dict]] = {}
+        # Settings.home_tracker; the app sets it, a run inherits it through the environment.
+        self.home_tracker = os.environ.get("POKELDN_HOME_TRACKER") or "empty"
 
     def _ask(self, request: dict) -> dict:
+        request = {**request, "home_tracker": self.home_tracker}
         with self.lock:
             for attempt in range(2):
                 if self.proc is None or self.proc.poll() is not None:
@@ -55,9 +63,7 @@ class Service:
                     self.proc = subprocess.Popen(_command(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                                  stderr=subprocess.DEVNULL, text=True, encoding="utf-8",
                                                  creationflags=flags)
-                self.proc.stdin.write(json.dumps(request) + "\n")
-                self.proc.stdin.flush()
-                line = self.proc.stdout.readline()
+                line = self._exchange(request)
                 if not line:
                     raise BuilderError("The Pokemon builder stopped.")
                 reply = json.loads(line)
@@ -68,6 +74,36 @@ class Service:
                 self._close()
                 if attempt:
                     raise BuilderError("PKHeX could not complete its legality analysis after restarting the builder.")
+
+    def _exchange(self, request):
+        proc = self.proc
+        replies = queue.Queue(maxsize=1)
+
+        def exchange():
+            try:
+                proc.stdin.write(json.dumps(request) + "\n")
+                proc.stdin.flush()
+                replies.put(proc.stdout.readline())
+            except (OSError, ValueError) as exc:
+                replies.put(exc)
+
+        if request.get("cmd") != "check":
+            exchange()
+        else:
+            worker = threading.Thread(target=exchange, name="pokemon check", daemon=True)
+            worker.start()
+        try:
+            reply = replies.get(timeout=CHECK_TIMEOUT)
+        except queue.Empty:
+            proc.kill()
+            proc.wait()
+            worker.join(timeout=2)
+            self._close()
+            raise BuilderError("PKHeX took too long to check this Pokemon.") from None
+        if isinstance(reply, Exception):
+            self._close()
+            raise BuilderError("The Pokemon builder stopped.") from reply
+        return reply
 
     def species(self, game: str) -> list[dict]:
         if game not in self.species_cache:
@@ -97,8 +133,8 @@ class Service:
 
     def make(self, game: str, species: int, trainer: dict, level: int = 0, shiny: bool = False,
              nickname: str = "", version: str = "", options: dict | None = None) -> dict:
-        """options: form, nature, ability, gender, held_item, ball (ids), moves (up to four ids), and ivs / effort
-        as {hp, atk, def, spa, spd, spe}."""
+        """options: form, nature, ability, gender, held_item, ball (ids), friendship (0-255), moves (up to four
+        ids), and ivs / effort as {hp, atk, def, spa, spd, spe}."""
         reply = self._ask({"cmd": "make", "game": game, "species": species, "level": level, "shiny": shiny,
                            "nickname": nickname, "trainer": trainer, "version": version,
                            "options": options or {}})
@@ -111,12 +147,27 @@ class Service:
                           "version": version})["sets"]
 
     def check_bytes(self, game: str, data: bytes, *, fresh=False, fields=None) -> dict:
-        data = entity_bytes(game, data)
+        if not isinstance(game, str) or game not in RECORD_SIZES or len(data) > RECORD_LIMIT:
+            raise BuilderError("This is not a Pokemon record of the selected game.")
+        try:
+            data = entity_bytes(game, data)
+        except ValueError as exc:
+            raise BuilderError("This is not a Pokemon record of the selected game.") from exc
+        if len(data) not in RECORD_SIZES[game]:
+            raise BuilderError("This is not a Pokemon record of the selected game.")
         return self._ask({"cmd": "check", "game": game, "data": base64.b64encode(data).decode(),
                           "fresh": fresh, "fields": fields or {}})
 
     def check(self, game: str, path: str) -> dict:
         return self.check_bytes(game, Path(path).expanduser().read_bytes())
+
+    def owner(self, game: str, data: bytes) -> dict:
+        """The owner of the Pokemon in `data`, as a console sends it, read with no legality check: species,
+        shiny, egg, ot, tid and sid (16-bit), gender, language, handler (0 while it is still with its original
+        trainer), the handling trainer's ht_name, ht_gender and ht_language (0 where the format keeps none), and
+        version (PKHeX's number). BuilderError for a record PKHeX cannot read."""
+        data = entity_bytes(game, data)
+        return self._ask({"cmd": "owner", "game": game, "data": base64.b64encode(data).decode()})
 
     def import_file(self, game: str, path: str) -> dict:
         reply = self.check(game, path)
@@ -124,6 +175,12 @@ class Service:
             raise BuilderError(reply["report"])
         reply["file"] = self.keep(game, reply)
         return reply
+
+    def import_records(self, data: bytes, name: str, trainers: dict[str, dict]) -> dict:
+        """Each Pokemon in a Pokemon file or a game save, as the bank would keep it [services/pkhex Import].
+        `trainers` maps every game to the trainer who receives a Pokemon HOME moves there."""
+        return self._ask({"cmd": "import", "game": "sv", "name": name, "trainers": trainers,
+                          "data": base64.b64encode(data).decode()})
 
     def prepare(self, game: str, data: bytes, *, fresh=False, fields=None) -> bytes:
         reply = self.check_bytes(game, data, fresh=fresh, fields=fields)
@@ -134,13 +191,14 @@ class Service:
         return base64.b64decode(reply["data"])
 
     def move(self, source: str, game: str, data: bytes, tracker: int, trainer: dict) -> dict:
-        """The banked Pokemon as `game` takes it from `trainer`, legal there, or BuilderError with the reason."""
+        """The banked Pokemon as `game` takes it from `trainer`, legal there, or BuilderError with the reason.
+        `tracker` fills a HOME tracker only under home_tracker "made"."""
         return self._ask({"cmd": "move", "game": game, "source": source, "tracker": str(tracker),
                           "trainer": trainer,
                           "data": base64.b64encode(entity_bytes(source, data)).decode()})
 
     def destinations(self, source: str, data: bytes, tracker: int, trainer: dict) -> dict[str, dict]:
-        """Each game key -> {"ok", "reason"}: whether `move` would give a legal Pokemon there."""
+        """Each game key -> {"ok", "reason", "home_tracker"}: whether `move` would give a legal Pokemon there."""
         return self._ask({"cmd": "destinations", "game": source, "tracker": str(tracker), "trainer": trainer,
                           "data": base64.b64encode(entity_bytes(source, data)).decode()})["games"]
 
@@ -152,6 +210,31 @@ class Service:
         """-> (decrypted .pk3 party record, summary): a fresh legal copy of the named event."""
         reply = self._ask({"cmd": "event", "game": "frlg", "name": name, "language": language})
         return base64.b64decode(reply["data"]), reply["summary"]
+
+    def gift_events(self, game: str, trainer: dict) -> list[dict]:
+        """The game's Mystery Gift Pokemon in PKHeX's event database, newest first, as `trainer` would receive
+        each: key, card_id, title, date, species, form, level, shiny (never, random or always), tera, the card's
+        own ot and language where it fixes them, ball, held_item, moves, legal, refused (`gift_event`'s), and
+        home_tracker: a gift HOME gave has the tracker the HOME tracker setting gives it (HOME_TRACKER_WARNINGS)."""
+        key = f"{game}:gift_events:{self.home_tracker}:{sorted(trainer.items())}"
+        if key not in self.species_cache:
+            self.species_cache[key] = self._ask({"cmd": "gift_events", "game": game, "trainer": trainer})["events"]
+        return self.species_cache[key]
+
+    def gift_event(self, game: str, key: str, trainer: dict, version: str = "", keep: bool = True) -> dict:
+        """A fresh copy of one of `gift_events`, as `trainer`'s save receives it, kept like a built Pokemon:
+        check's reply with its key, its card's title, your_ot (the card gives the receiver's own trainer, so
+        the copy carries `trainer`), refused and the file. refused says why no save like `trainer`'s received
+        the card, in its language or, with `version`, on that version; "" when one did, and such a copy is never
+        kept. A gift HOME gave has the tracker the HOME tracker setting gives it. `version` (PKHeX's name, SL or
+        VL) makes it on that version alone, as that save would receive it; without `keep` no file is written."""
+        request = {"cmd": "gift_event", "game": game, "key": key, "trainer": trainer}
+        if version:
+            request.update(version=version, only_version=True)
+        reply = self._ask(request)
+        if keep and not reply["refused"]:
+            reply["file"] = self.keep(game, reply)
+        return reply
 
     def save_read(self, data: bytes) -> dict:
         """A FireRed/LeafGreen .sav: trainer, party (each with PKHeX's legality verdict) and box contents."""
@@ -184,7 +267,10 @@ class Service:
 
     def _close(self):
         if self.proc is not None:
-            self.proc.stdin.close()
+            try:
+                self.proc.stdin.close()
+            except OSError:
+                pass
             try:
                 self.proc.wait(timeout=2)
             except subprocess.TimeoutExpired:
@@ -206,6 +292,10 @@ class Service:
 
 SERVICE = Service()
 atexit.register(SERVICE.close)
+
+
+# What a reply's "home_tracker" means for HOME (docs/gui.md, The bank).
+HOME_TRACKER_WARNINGS = {"empty": "PKHeX flags the missing HOME tracker", "made": "Can't be deposited in HOME"}
 
 
 def summary(info: dict) -> str:
@@ -253,11 +343,19 @@ def offer_bytes(game, data):
     return data
 
 
-def prepare_file(game, path, *, fresh=False, fields=None, transform=None):
-    data = entity_bytes(game, Path(path).expanduser().read_bytes())
+def prepare_offer(game, data, *, fresh=False, fields=None, transform=None):
+    """-> `data` as a host offers it, through the offer check every offer takes: `transform`, PKHeX's check
+    (`prepare`) and the game's offer form. A Mystery Gift made during the trade takes it too
+    (pokeldn.receiver_gift)."""
+    data = entity_bytes(game, data)
     if transform is not None:
         data = entity_bytes(game, transform(data))
-    data = offer_bytes(game, prepare(game, data, fresh=fresh, fields=fields))
+    return offer_bytes(game, prepare(game, data, fresh=fresh, fields=fields))
+
+
+def prepare_file(game, path, *, fresh=False, fields=None, transform=None):
+    data = prepare_offer(game, Path(path).expanduser().read_bytes(), fresh=fresh, fields=fields,
+                         transform=transform)
     folder = SESSION / "offers"
     folder.mkdir(parents=True, exist_ok=True)
     extension = "bin" if game == "za" else EXTENSIONS[game]

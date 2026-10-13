@@ -6,7 +6,7 @@ import flet as ft
 
 from gui import theme as t
 from gui.app import keys_found
-from pokeldn import __version__
+from pokeldn import __version__, pokemon
 from pokeldn.app.paths import SESSION
 from pokeldn.app.sprites import CACHE
 from pokeldn.app.settings import LANGUAGES, switch_ids_valid
@@ -79,6 +79,10 @@ class SettingsView:
                 ft.Column([t.text("Name", 11, t.MUTED),
                            t.field(value=s.ot, limit=12, on_change=lambda e: self.save("ot", e.control.value[:12]))],
                           spacing=4, expand=True),
+                ft.Column([t.text("Gender", 11, t.MUTED),
+                           t.dropdown([("0", "Male"), ("1", "Female")], str(s.gender),
+                                      on_select=lambda e: self.save("gender", int(e.control.value)))],
+                          spacing=4, expand=True),
                 ft.Column([t.text("Language", 11, t.MUTED),
                            t.dropdown(list(LANGUAGES), str(s.language),
                                       on_select=lambda e: self.save("language", int(e.control.value)))],
@@ -109,6 +113,11 @@ class SettingsView:
             switch("board_trace", "Record the board's serial traffic",
                    "Adds the board's counters and every serial message to the session record. Only for radio "
                    "problems someone asked you to report."),
+            t.card("HOME tracker", t.dropdown([("empty", "Leave it empty (default)"), ("made", "Make one")],
+                                              s.home_tracker, on_select=lambda e: self._home_tracker(e.control.value)),
+                   "What the bank, the Pokemon builder and Mystery Gift - Simulated put in the HOME tracker of a "
+                   "Pokemon moved to another game or received from a Mystery Gift. PKHeX flags an empty one; HOME "
+                   "refuses a made one."),
             t.card("Pokemon sprites", ft.Row([t.button("Clear the cache", self._clear_sprites, "refresh",
                                                         filled=False), self.sprite_state], spacing=10),
                    "Pixel-art sprites come from PokeAPI and are kept on this computer after the first download. "
@@ -124,9 +133,10 @@ class SettingsView:
                    "prod.keys dumped from your own console. Needed to talk to the games; it never leaves this "
                    "computer."),
             t.card("Your trainer", trainer,
-                   "The original trainer of every Pokemon the app builds for you. Put your own name and IDs to "
-                   "make them yours: FireRed and LeafGreen show a five-digit ID, the Switch games a six-digit "
-                   "one. The IDs were drawn at random on first launch."),
+                   "The original trainer of every Pokemon the app builds for you. Put your own name, gender and "
+                   "IDs to make them yours, so a traded Pokemon keeps its friendship: FireRed and LeafGreen show "
+                   "a five-digit ID, the Switch games a six-digit one. The IDs were drawn at random on first "
+                   "launch."),
             t.card("Received Pokemon", ft.Row([ft.Container(received.control, expand=True),
                                                t.icon_button("external-link",
                                                              lambda e: open_folder(os.path.expanduser(s.received)),
@@ -151,12 +161,16 @@ class SettingsView:
             *(advanced if self.show_advanced else []),
             t.card("Updates", ft.Row([t.button("Check now", self._check_update, "refresh", filled=False),
                                       self.update_state], spacing=10),
-                   "Asks GitHub for a newer pokeldn when the app starts. Nothing about you or your games is "
-                   "sent.",
+                   "Asks GitHub for a newer pokeldn when the app starts, and each installed plugin's own "
+                   "address for a newer version of it. Nothing about you or your games is sent.",
                    trailing=t.switch(s.check_updates, lambda e: self.save("check_updates", e.control.value))),
             t.card(f"About pokeldn {__version__}", ft.Row([link(label, url) for label, url in LINKS], spacing=4),
                    "pokeldn is AGPLv3. Pokemon are checked with PKHeX.Core (GPLv3)."),
         ]
+
+    def _home_tracker(self, value: str) -> None:
+        self.save("home_tracker", value)
+        pokemon.SERVICE.home_tracker = value
 
     def _toggle_advanced(self, e) -> None:
         self.show_advanced = not self.show_advanced
