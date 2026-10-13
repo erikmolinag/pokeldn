@@ -9,8 +9,8 @@ pokeldn is an implementation of Nintendo Switch local wireless (LDN) that speaks
 running on retail Switch hardware, through an ESP32 board on USB serial as its radio. These pages document the protocols involved, with
 decompilation citations, disassembly addresses and hardware measurements.
 
-Installation, the command-line reference and the code layout are in the
-[repository README](https://github.com/Decryptu/pokeldn#readme).
+Start with [app setup](gui.md) or [command-line usage](usage.md).
+[Code organization](architecture.md) covers the shared modules and tests.
 
 ## Targets
 
@@ -20,6 +20,7 @@ Seven games, all on retail hardware, all over the same LDN and Pia layers:
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | Trade | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Mystery Gift | ✓ | ∅ | ✓ | ∅ | ∅ | ∅ | ∅ |
+| Event Pokemon | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Link battle | ✓ | ✗ | ✗ | ✗ | ∅ | ✗ | ✗ |
 | Code on the console, save read and write | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
 
@@ -45,6 +46,10 @@ Legends Arceus, in Scarlet and Violet and in Legends Z-A.
 | [Legends Arceus](pla.md) | Pia header version 11, the trade flow, and the record a host composes. |
 | [Scarlet and Violet](sv.md) | Pia header version 11, the reliable streams, the trade a host runs, and Tera Raids in both roles. |
 | [Legends Z-A](za.md) | Pia header version 16, the game's twenty trade messages, and the trade in both roles. |
+| [Simulated Mystery Gifts](gift_simulated.md) | Official gift Pokemon traded by the host to the five titles with no local Mystery Gift, made for the receiving save. |
+| [Command-line usage](usage.md) | Source setup and commands for each game. |
+| [Desktop app](gui.md) | Setup, Bank, controller, updates and builds. |
+| [Code organization](architecture.md) | Shared modules, Pokémon preparation and verification. |
 | [Hardware and setup](hardware.md) | The ESP32 radio, Switch keys, and legacy Linux Wi-Fi cards. |
 
 ## Credits

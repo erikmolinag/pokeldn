@@ -140,19 +140,22 @@ class GiftBuilder:
             sections.append(t.section(tr(group), ft.Column(body, spacing=10)))
         return ft.Column(sections, spacing=14)
 
-    def _tile(self, label, summary, active, on_click, settings=False) -> ft.Control:
-        """The preset's name and full description, including any steps needed to use it."""
+    def _tile(self, label, summary, active, on_click, settings=False, warning="") -> ft.Control:
+        """The preset's name and full description, including any steps needed to use it. A `warning`
+        tile has an amber outline, chosen or not, and says why."""
         head = [t.text(label, 13, weight=ft.FontWeight.W_600, expand=True)]
         if settings:
             head.append(t.pixel_icon("sliders-horizontal", color=t.BLUE if active else t.FAINT,
                                      tooltip=tr("Has settings")))
+        lines = [ft.Row(head, spacing=6), t.text(summary, 12, t.MUTED)]
+        if warning:
+            lines.append(ft.Row([t.pixel_icon("warning-diamond", size=12, color=t.AMBER),
+                                 t.text(warning, 12, t.AMBER, expand=True)], spacing=6))
         return ft.Container(ft.Row([
             t.pixel_icon("checkbox-on" if active else "checkbox", color=t.BLUE if active else t.FAINT),
-            ft.Column([ft.Row(head, spacing=6),
-                       t.text(summary, 12, t.MUTED)],
-                      spacing=1, expand=True),
+            ft.Column(lines, spacing=1, expand=True),
         ], spacing=10), padding=ft.Padding(10, 8, 10, 8), border_radius=10,
-            tooltip=summary, border=ft.Border.all(1, t.BLUE if active else t.BORDER),
+            tooltip=summary, border=ft.Border.all(1, t.AMBER if warning else t.BLUE if active else t.BORDER),
             bgcolor=t.SELECTED if active else None, on_click=on_click)
 
     def _toggle(self, preset, key) -> None:
@@ -218,7 +221,8 @@ class GiftBuilder:
 
     def events(self) -> ft.Control:
         """Every official card the game's builder ships, filtered by a search and a group."""
-        cards = self.module.OFFICIAL.load()
+        official = self.module.OFFICIAL
+        cards = official.load()
         tiles = ft.Column(spacing=6, tight=True)
         search = t.field(hint=tr("Search: Pikachu, Master Ball, shiny..."), value=self.value.get("event_search", ""))
         group = {"value": self.value.get("event_group", "")}
@@ -228,7 +232,10 @@ class GiftBuilder:
             shown = [c for c in cards if (not group["value"] or c["group"] == group["value"])
                      and all(w in f"{c['label']} {c['group']} {c['summary']}".casefold() for w in words)]
             tiles.controls = t.grid_rows([self._tile(c["label"], c["summary"], c["key"] == self.value["event"],
-                                                     lambda e, k=c["key"]: self._event(k)) for c in shown])
+                                                     lambda e, k=c["key"]: self._event(k),
+                                                     warning=tr(pokemon.HOME_TRACKER_WARNINGS["empty"])
+                                                     if official.from_home(c["record"]) else "")
+                                          for c in shown])
             count.value = tr("{n} of {total} cards", n=len(shown), total=len(cards))
             if update:
                 tiles.update()
@@ -243,10 +250,11 @@ class GiftBuilder:
         search.on_change = lambda e: filtered("event_search", search.value)
         count = t.text("", 12, t.MUTED)
         render(update=False)
-        groups = _chips([("", "All")] + [(g, g) for g in self.module.OFFICIAL.GROUPS], group["value"],
+        groups = _chips([("", "All")] + [(g, g) for g in official.GROUPS], group["value"],
                         lambda k: filtered("event_group", k))
-        intro = t.text(tr("Real event cards from the projectpokemon EventsGallery archive. Each one passed the "
-                          "game's own card check."), 12, t.MUTED)
+        intro = t.text(tr("Real event cards from the projectpokemon EventsGallery archive, and under Pokemon HOME "
+                          "the community's cards of the gifts Pokemon HOME gave. Each one passed the game's own "
+                          "card check."), 12, t.MUTED)
         listing = ft.Container(ft.Column([tiles], scroll=ft.ScrollMode.AUTO), height=440)
         return ft.Column([intro, search, groups, count, listing], spacing=10)
 
@@ -502,8 +510,8 @@ class GiftBuilder:
                      ft.Row([self.text_field(tr("Nickname"), "nickname", limit=12),
                              self.text_field(tr("OT"), "ot", limit=12)], spacing=10),
                      self.switch_row(tr("Shiny"), "shiny", tr("The Pokemon arrives shiny.")),
-                     self.switch_row("Gigantamax", "gigantamax",
-                                     tr("It can Gigantamax; only species with a Gigantamax form."))]
+                     self.switch_row("Gigantamax", "gigantamax", tr("It can Gigantamax: a species with a "
+                                     "Gigantamax form, or one that evolves into one."))]
         rows += [self.moves(self.state), self.number_field(tr("Card id"), "card_id")]
         return ft.Column(rows, spacing=10)
 
@@ -586,6 +594,7 @@ class GiftBuilder:
     def show_summary(self, update=False) -> None:
         mode = self.value["mode"]
         self.status.value, self.status.color = "", t.MUTED
+        warnings = []
         if mode == "build":
             when, lines = self.module.describe(self.state, self.name)
         elif mode == "preset":
@@ -599,8 +608,10 @@ class GiftBuilder:
         elif mode == "save":
             when, lines = self.save_summary()
         elif mode == "event":
-            when, lines = self.module.OFFICIAL.describe(self.module.OFFICIAL.by_key()[self.value["event"]]["record"],
-                                                      self.name)
+            record = self.module.OFFICIAL.by_key()[self.value["event"]]["record"]
+            when, lines = self.module.OFFICIAL.describe(record, self.name)
+            if self.module.OFFICIAL.from_home(record):
+                warnings = [f"{tr(pokemon.HOME_TRACKER_WARNINGS['empty'])}. {tr(self.module.OFFICIAL.HOME_WHY)}"]
         else:
             when, lines = "", []
         problem = gift_builder.problem(self.tool, self.value)
@@ -618,6 +629,8 @@ class GiftBuilder:
         self.when.visible = bool(when)
         self.effects.controls = [ft.Row([t.pixel_icon("check", color=t.GREEN), t.text(tr(line), 13, expand=True)],
                                         spacing=8) for line in lines]
+        self.effects.controls += [ft.Row([t.pixel_icon("warning-diamond", color=t.AMBER),
+                                          t.text(line, 13, t.AMBER, expand=True)], spacing=8) for line in warnings]
         if update:
             for control in (self.when, self.effects, self.status):
                 control.update()

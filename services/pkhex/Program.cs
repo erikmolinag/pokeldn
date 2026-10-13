@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using System.Text.Json.Nodes;
 using PKHeX.Core;
 using static PKHeX.Core.GameVersion;
@@ -7,6 +8,8 @@ using static PKHeX.Core.GameVersion;
 var strings = GameInfo.GetStrings("en");
 // Cut, Fly, Surf, Strength, Waterfall, Flash, Rock Smash, Dive
 var hiddenMoves = new HashSet<ushort> { 15, 19, 57, 70, 127, 148, 249, 291 };
+// Diamond to SoulSilver: Cut, Fly, Surf, Strength, Waterfall, Rock Smash, Whirlpool, Rock Climb, Defog
+var hiddenMoves4 = new HashSet<ushort> { 15, 19, 57, 70, 127, 249, 250, 431, 432 };
 var games = new Dictionary<string, Game>
 {
     ["frlg"] = new([FR, LG, E, R, S], PersonalTable.FR, EntityContext.Gen3, () => new PK3(), DecryptedParty),
@@ -19,12 +22,19 @@ var games = new Dictionary<string, Game>
     ["za"] = new([ZA], PersonalTable.ZA, EntityContext.Gen9a, () => new PA9(), DecryptedParty),
 };
 
+// The app's HOME tracker setting (docs/gui.md, The bank): "empty" leaves a tracker HOME would have issued unset
+// and accepts PKHeX's one complaint about it; "made" fills it. HOME 3.1.0 refuses a tracker it did not issue.
+var emptyTracker = true;
+var madeTrackers = new HashSet<ulong>();
+
 while (Console.ReadLine() is { } line)
 {
     JsonObject reply;
     try
     {
         var request = JsonNode.Parse(line)!.AsObject();
+        emptyTracker = (string?)request["home_tracker"] != "made";
+        madeTrackers.Clear();
         var game = games[(string)request["game"]!];
         reply = (string)request["cmd"]! switch
         {
@@ -35,14 +45,19 @@ while (Console.ReadLine() is { } line)
             "make" => Make(game, request),
             "paste" => Paste(game, request),
             "check" => Check(game, Convert.FromBase64String((string)request["data"]!), request),
+            "owner" => Owner(game, Convert.FromBase64String((string)request["data"]!)),
             "gift" => Gift(Convert.FromBase64String((string)request["data"]!)),
             "events" => Events(),
             "event" => Event(game, request),
+            "gift_events" => GiftEventList(game, request),
+            "gift_event" => GiftEvent(game, request),
             "sav_read" => SaveRead(game, request),
             "sav_box" => SaveBox(game, request),
             "sav_edit" => SaveEdit(game, request),
+            "import" => Import(request),
             "move" => Move(game, request),
             "destinations" => Destinations(game, request),
+            "raid_scan" => RaidScan.Run(request),
             var other => throw new ArgumentException($"unknown command {other}"),
         };
         reply["ok"] = true;
@@ -213,7 +228,8 @@ JsonObject Options(Game game, JsonObject request)
     {
         if (!Enum.TryParse<GameVersion>(v, out var chosen) || !versions.Contains(chosen))
             throw new ArgumentException("This version is incompatible with the selected game.");
-        versions = [chosen, .. versions.Where(x => x != chosen)];
+        // "only_version": the trainer's own game alone, as a gift made for a receiving player (docs/gift_simulated.md).
+        versions = (bool?)request["only_version"] ?? false ? [chosen] : [chosen, .. versions.Where(x => x != chosen)];
     }
     return (versions, new SimpleTrainerInfo(versions[0])
     {
@@ -323,7 +339,7 @@ JsonObject Make(Game game, JsonObject request)
                 wish.Apply(pk);
                 var la = Mend(pk, evolved, encounter, trainer, wish);
                 var unmet = wish.Unmet(pk, strings);
-                if (la.Valid && unmet is null)
+                if (Accepted(la) && unmet is null)
                     return Describe(game, pk, la);
                 if (unmet is null)
                     firstProblem ??= la.Report();
@@ -350,13 +366,13 @@ JsonObject Make(Game game, JsonObject request)
 LegalityAnalysis Mend(PKM pk, bool evolved, IEncounterTemplate encounter, ITrainerInfo trainer, Wish wish)
 {
     var la = Refresh(pk, wish);
-    if (la.Valid)
+    if (Accepted(la))
         return la;
     var repairs = new List<Action>();
     // Event Pokemon that Sword/Shield received only through HOME (Zeraora, Melmetal) carry a HOME tracker.
     // This comes first: a refit would replace the event's fixed moves.
-    if (encounter is MysteryGift && pk is IHomeTrack { HasTracker: false } home)
-        repairs.Add(() => home.Tracker = (ulong)Random.Shared.NextInt64(1, long.MaxValue));
+    if (!emptyTracker && encounter is MysteryGift && pk is IHomeTrack { HasTracker: false } home)
+        repairs.Add(() => home.Tracker = MadeTracker((ulong)Random.Shared.NextInt64(1, long.MaxValue)));
     // Moves, relearn moves and move flags depend on the species and level just set.
     repairs.Add(() => Refit(pk, wish));
     if (evolved)
@@ -368,7 +384,7 @@ LegalityAnalysis Mend(PKM pk, bool evolved, IEncounterTemplate encounter, ITrain
             // A trade evolution has been through a trade, and some gifts (Z-A's Magearna) arrive already handled.
             pk.CurrentHandler = 1;
             pk.HandlingTrainerName = "POKELDN";
-            pk.HandlingTrainerGender = (byte)(1 - trainer.Gender);
+            pk.HandlingTrainerGender = 0;
             if (pk is IHandlerLanguage language)
                 language.HandlingTrainerLanguage = (byte)trainer.Language;
             Refit(pk, wish);
@@ -398,7 +414,7 @@ LegalityAnalysis Mend(PKM pk, bool evolved, IEncounterTemplate encounter, ITrain
             continue;
         }
         la = Refresh(pk, wish);
-        if (la.Valid)
+        if (Accepted(la))
             break;
     }
     return la;
@@ -415,17 +431,44 @@ static EvolutionMethod? HowEvolved(PKM pk)
     return null;
 }
 
+// Valid, or invalid only for the HOME tracker the "empty" setting leaves unset [HomeTrackerUtil.IsRequired].
+bool Accepted(LegalityAnalysis la) => la.Valid || emptyTracker && OnlyTrackerMissing(la);
+
+static bool OnlyTrackerMissing(LegalityAnalysis la)
+    => la.Parsed && la.Results.Any(r => !r.Valid)
+       && la.Results.All(r => r.Valid || r.Result == LegalityCheckResultCode.TransferTrackerMissing)
+       && la.Info.Moves.All(m => m.Valid) && la.Info.Relearn.All(m => m.Valid);
+
+ulong MadeTracker(ulong tracker)
+{
+    madeTrackers.Add(tracker);
+    return tracker;
+}
+
 LegalityAnalysis Refresh(PKM pk, Wish? wish = null)
 {
     if (pk is PB7 pb7)
     {
         AwakeningUtil.SetSuggestedAwakenedValues(pb7, pb7);
         wish?.ApplyEffort(pk);
-        pb7.ResetCalculatedValues();
+        ResetSizes(pb7);
     }
     pk.ResetPartyStats();
     pk.RefreshChecksum();
     return new LegalityAnalysis(pk);
+}
+
+// Let's Go computes a Pokemon's height and weight, except on HOME's Meltan (card 9028), which keeps the ones HOME
+// gave it [MiscVerifierPB7].
+static void ResetSizes(PB7 pb7)
+{
+    pb7.ResetCalculatedValues();
+    if (pb7.Species == (ushort)PKHeX.Core.Species.Meltan
+        && new LegalityAnalysis(pb7).EncounterMatch is WB7 { IsHeightWeightFixed: true } card)
+    {
+        pb7.HeightAbsolute = card.GetHomeHeightAbsolute();
+        pb7.WeightAbsolute = card.GetHomeWeightAbsolute();
+    }
 }
 
 void Refit(PKM pk, Wish wish)
@@ -436,6 +479,16 @@ void Refit(PKM pk, Wish wish)
     else
         pk.SetMoveset();
     pk.SetRelearnMoves(new LegalityAnalysis(pk));
+    Permit(pk);
+    if (pk is PA8 pa8)
+    {
+        pa8.ResetHeight();
+        pa8.ResetWeight();
+    }
+}
+
+void Permit(PKM pk)
+{
     // A TM or TR move the suggested moveset holds is legal only with its record flag (Sword/Shield's TRs).
     if (pk is ITechRecord record)
         record.SetRecordFlags(pk, TechnicalRecordApplicatorOption.LegalCurrent);
@@ -443,11 +496,26 @@ void Refit(PKM pk, Wish wish)
         PlusRecordApplicator.SetPlusFlags(plus, pk, permit, PlusRecordApplicatorOption.LegalCurrent);
     if (pk is IMoveShop8Mastery shop)
         shop.SetMoveShopFlags(pk);
-    if (pk is PA8 pa8)
+}
+
+// PKHeX's report as a player reads it: the per-move lines folded into one, each problem once.
+static string Plain(LegalityAnalysis la)
+{
+    var lines = new List<string>();
+    var moves = la.Info.Moves.Count(m => !m.Valid);
+    if (moves > 0)
+        lines.Add(moves == 1 ? "One of its moves is not legal." : $"{moves} of its moves are not legal.");
+    foreach (var raw in la.Report().Split('\n'))
     {
-        pa8.ResetHeight();
-        pa8.ResetWeight();
+        var line = raw.Trim();
+        if (line.Length == 0 || Regex.IsMatch(line, @"^Invalid (Relearn )?Move \d+:"))
+            continue;
+        if (line.StartsWith("Invalid: "))
+            line = line["Invalid: ".Length..];
+        if (!lines.Contains(line))
+            lines.Add(line);
     }
+    return string.Join("\n", lines);
 }
 
 PKM Parse(Game game, byte[] data)
@@ -459,6 +527,32 @@ PKM Parse(Game game, byte[] data)
     if (pk.GetType() != game.Blank().GetType())
         throw new InvalidDataException($"Expected {game.Blank().GetType().Name}, received {pk.GetType().Name}.");
     return pk;
+}
+
+// Whose a Pokemon is, read with no legality check, for a gift made for the save that offers it
+// (docs/gift_simulated.md, Made for the receiving player): its original trainer, its current handler (0 while
+// still with that trainer), the handler's name, gender and language, and the version it came from.
+JsonObject Owner(Game game, byte[] data)
+{
+    var pk = Parse(game, data);
+    if (!pk.ChecksumValid)
+        throw new InvalidDataException("The Pokemon checksum is invalid.");
+    return new JsonObject
+    {
+        ["species"] = pk.Species,
+        ["shiny"] = pk.IsShiny,
+        ["egg"] = pk.IsEgg,
+        ["ot"] = pk.OriginalTrainerName,
+        ["tid"] = pk.TID16,
+        ["sid"] = pk.SID16,
+        ["gender"] = pk.OriginalTrainerGender,
+        ["language"] = pk.Language,
+        ["handler"] = pk.CurrentHandler,
+        ["ht_name"] = pk.HandlingTrainerName,
+        ["ht_gender"] = pk.HandlingTrainerGender,
+        ["ht_language"] = pk is IHandlerLanguage handler ? handler.HandlingTrainerLanguage : 0,
+        ["version"] = (int)pk.Version,
+    };
 }
 
 JsonObject Check(Game game, byte[] data, JsonObject request)
@@ -473,10 +567,27 @@ JsonObject Check(Game game, byte[] data, JsonObject request)
         {
             switch (name)
             {
+                case "nickname" when ((string)value!).Trim().Length == 0: pk.ClearNickname(); break;
                 case "nickname": pk.SetNickname((string)value!); break;
                 case "ot_name": pk.OriginalTrainerName = (string)value!; break;
                 case "trainer_id": pk.TID16 = checked((ushort)(int)value!); break;
                 case "secret_id": pk.SID16 = checked((ushort)(int)value!); break;
+                // The bank's editor (docs/gui.md, The bank): what a player can change in the game itself.
+                case "level":
+                    var level = (int)value!;
+                    if (level < pk.CurrentLevel || level > 100)
+                        throw new ArgumentException($"The level goes from {pk.CurrentLevel} to 100: a Pokemon never loses levels.");
+                    pk.CurrentLevel = (byte)level;
+                    break;
+                case "moves":
+                    var moves = ((JsonArray)value!).Select(m => (ushort)(int)m!).Where(m => m != 0).ToArray();
+                    if (moves.Length == 0)
+                        throw new ArgumentException("A Pokemon knows at least one move.");
+                    pk.SetMoves(moves);
+                    pk.HealPP();
+                    Permit(pk);
+                    break;
+                case "held_item": pk.HeldItem = (int)value!; break;
                 default: throw new ArgumentException($"Unsupported edit {name}.");
             }
         }
@@ -484,13 +595,13 @@ JsonObject Check(Game game, byte[] data, JsonObject request)
     if ((bool?)request["fresh"] == true)
     {
         var (pid, ec) = (pk.PID, pk.EncryptionConstant);
-        var legal = new LegalityAnalysis(pk).Valid;
+        var legal = Accepted(new LegalityAnalysis(pk));
         var xor = (pk.PID >> 16) ^ (pk.PID & 0xFFFF);
         var high = (uint)Random.Shared.Next(0x10000);
         pk.PID = (high << 16) | (high ^ xor);
         pk.EncryptionConstant = (uint)Random.Shared.NextInt64(1, 1L << 32);
         // An event Pokemon's PID is part of the event: a new one makes it illegal.
-        if (legal && !new LegalityAnalysis(pk).Valid)
+        if (legal && !Accepted(new LegalityAnalysis(pk)))
         {
             (pk.PID, pk.EncryptionConstant) = (pid, ec);
             note = "kept its own PID: this event Pokemon is legal only with it";
@@ -502,7 +613,7 @@ JsonObject Check(Game game, byte[] data, JsonObject request)
     if (pk is PB7 pb7)
     {
         pb7.ResetPartyStats();
-        pb7.ResetCalculatedValues();
+        ResetSizes(pb7);
     }
     var reply = Describe(game, pk, new LegalityAnalysis(pk));
     if (note is not null)
@@ -511,18 +622,22 @@ JsonObject Check(Game game, byte[] data, JsonObject request)
 }
 
 // A banked Pokemon taken to `game` through PKHeX's HOME conversion (docs/gui.md, The bank). A Pokemon from
-// another game carries the bank's HOME tracker, which PKHeX's legality check requires [HomeTrackerUtil].
+// another game carries the bank's HOME tracker under the "made" setting [HomeTrackerUtil].
 (PKM? Pokemon, LegalityAnalysis? Legality, string Refusal) Moved(Game from, Game to, byte[] data, ulong tracker,
                                                                    ITrainerInfo owner)
+    => Converted(Parse(from, data), to, tracker, owner, from != to);
+
+(PKM? Pokemon, LegalityAnalysis? Legality, string Refusal) Converted(PKM source, Game to, ulong tracker,
+                                                                       ITrainerInfo owner, bool transfer)
 {
-    var source = Parse(from, data);
     if (!source.ChecksumValid)
         return (null, null, "The Pokemon checksum is invalid.");
     PKM pk = source;
-    if (from != to)
+    if (transfer)
     {
-        if (!EntityConverter.IsConvertibleToFormat(source, to.Blank().Format))
-            return (null, null, "Nothing goes back to this game: HOME only takes from it.");
+        // Let's Go's format (7) is above FireRed's, so the converter alone would let a PK3 through.
+        if (to.Context == EntityContext.Gen7b || !EntityConverter.IsConvertibleToFormat(source, to.Blank().Format))
+            return (null, null, "HOME cannot send Pokemon into this game.");
         if (source.IsEgg)
             return (null, null, "An egg stays in its own game.");
         // HOME's screen for FireRed and LeafGreen: no held item, no hidden move (HM).
@@ -531,11 +646,12 @@ JsonObject Check(Game game, byte[] data, JsonObject request)
         if (source is PK3 && source.Moves.Any(m => hiddenMoves.Contains(m)))
             return (null, null, "HOME takes a FireRed or LeafGreen Pokemon only without an HM move.");
         if (!to.Table.IsPresentInGame(source.Species, source.Form))
-            return (null, null, "This species or form is absent from that game.");
+            return (null, null, source.Form == 0 ? $"{strings.specieslist[source.Species]} is not in that game."
+                                                 : $"This form of {strings.specieslist[source.Species]} is not in that game.");
         pk = EntityConverter.ConvertToType(source, to.Blank().GetType(), out var result)
              ?? throw new InvalidDataException($"PKHeX has no transfer route ({result}).");
-        if (pk is IHomeTrack { HasTracker: false } home)
-            home.Tracker = tracker;
+        if (!emptyTracker && pk is IHomeTrack { HasTracker: false } home)
+            home.Tracker = MadeTracker(tracker);
         // The bank's owner receives it in the new game, as HOME hands it to the save it is moved into.
         if (pk is IHandlerUpdate handler)
             handler.UpdateHandler(owner);
@@ -546,7 +662,7 @@ JsonObject Check(Game game, byte[] data, JsonObject request)
     }
     var la = new LegalityAnalysis(pk);
     // Sword/Shield's check wants a Pokemon from another game handled even by its own trainer.
-    if (!la.Valid && from != to && pk.CurrentHandler == 0)
+    if (!Accepted(la) && transfer && pk.CurrentHandler == 0)
     {
         pk.CurrentHandler = 1;
         pk.HandlingTrainerName = owner.OT;
@@ -555,19 +671,142 @@ JsonObject Check(Game game, byte[] data, JsonObject request)
             language.HandlingTrainerLanguage = (byte)owner.Language;
         pk.RefreshChecksum();
         var handled = new LegalityAnalysis(pk);
-        if (handled.Valid)
+        if (Accepted(handled))
             la = handled;
         else
             pk.CurrentHandler = 0;
     }
     // A move the new game lacks: HOME's games replace the moves, so the bank takes PKHeX's suggestion.
-    if (!la.Valid && from != to && la.Info.Moves.Any(m => !m.Valid))
+    if (!Accepted(la) && transfer && la.Info.Moves.Any(m => !m.Valid))
     {
         Refit(pk, Wish.From(null));
         pk.RefreshChecksum();
         la = new LegalityAnalysis(pk);
     }
-    return la.Valid ? (pk, la, "") : (pk, la, la.Report());
+    return Accepted(la) ? (pk, la, "") : (pk, la, Plain(la));
+}
+
+// A Pokemon file or a game save, each Pokemon in it as the bank would keep it (docs/gui.md, Importing). A
+// record of a game the bank holds stays as it is; any other goes through HOME's conversion.
+JsonObject Import(JsonObject request)
+{
+    var data = Convert.FromBase64String((string)request["data"]!);
+    var name = (string?)request["name"] ?? "";
+    var found = new JsonArray();
+    var reply = new JsonObject { ["pokemon"] = found };
+    if (SaveUtil.TryGetSaveFile(data, out var sav, name))
+    {
+        // A GBA save does not say which of its pair it is; PKHeX guesses FireRed or Ruby.
+        var version = sav switch
+        {
+            SAV3FRLG => "FireRed/LeafGreen",
+            SAV3RS => "Ruby/Sapphire",
+            _ => GameInfo.GetVersionName(sav.Version),
+        };
+        reply["save"] = $"{version}, {sav.OT}";
+        if (sav.HasParty)
+            for (var slot = 0; slot < sav.PartyCount; slot++)
+                if (sav.GetPartySlotAtIndex(slot) is { Species: not 0 } pk)
+                    found.Add(Imported(request, pk, $"Party, slot {slot + 1}"));
+        if (sav.HasBox)
+            for (var box = 0; box < sav.BoxCount; box++)
+            {
+                var title = sav is IBoxDetailNameRead named && named.GetBoxName(box) is { Length: > 0 } n
+                    ? n : $"Box {box + 1}";
+                for (var slot = 0; slot < sav.BoxSlotCount; slot++)
+                    if (sav.GetBoxSlotAtIndex(box, slot) is { Species: not 0 } pk)
+                        found.Add(Imported(request, pk, $"{title}, slot {slot + 1}"));
+            }
+    }
+    else if (FileUtil.TryGetPKM(data, out var pk, Path.GetExtension(name)))
+        found.Add(Imported(request, pk, ""));
+    else
+        throw new InvalidDataException("PKHeX reads neither a Pokemon nor a game save in this file.");
+    return reply;
+}
+
+// `key` names the record as it sits in the file, so the app imports each one once.
+JsonObject Imported(JsonObject request, PKM source, string where)
+{
+    var stored = new byte[source.SIZE_STORED];
+    source.WriteDecryptedDataStored(stored);
+    JsonObject reply;
+    try
+    {
+        var (game, pk, la, notes) = Banked(request, source.Clone());
+        reply = Describe(games[game], pk, la);
+        reply["game"] = game;
+        reply["notes"] = notes;
+    }
+    catch (InvalidDataException e)
+    {
+        reply = new JsonObject
+        {
+            ["species"] = source.Species < strings.specieslist.Length ? strings.specieslist[source.Species] : "",
+            ["species_id"] = source.Species,
+            ["shiny"] = source.IsShiny,
+            ["refusal"] = e.Message,
+        };
+    }
+    reply["key"] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stored));
+    reply["where"] = where;
+    reply["source"] = source.GetType().Name;
+    return reply;
+}
+
+(string Game, PKM Pokemon, LegalityAnalysis Legality, JsonArray Notes) Banked(JsonObject request, PKM source)
+{
+    if (!source.ChecksumValid)
+        throw new InvalidDataException("The Pokemon checksum is invalid.");
+    source.ResetPartyStats();
+    source.RefreshChecksum();
+    foreach (var (key, game) in games)
+        if (source.GetType() == game.Blank().GetType())
+        {
+            var la = new LegalityAnalysis(source);
+            return Accepted(la) ? (key, source, la, []) : throw new InvalidDataException(Plain(la));
+        }
+    // What HOME's way in takes off: the held item goes back to the bag, and Pal Park and Poke Transfer
+    // refuse a Pokemon knowing an HM. The file is left as it is, so the item and moves stay in that game.
+    var notes = new JsonArray();
+    if (source.HeldItem != 0)
+    {
+        var items = strings.GetItemStrings(source.Context, source.Version);
+        notes.Add($"Left its {(source.HeldItem < items.Length ? items[source.HeldItem] : $"item {source.HeldItem}")} behind");
+        source.HeldItem = 0;
+    }
+    var hidden = source.Format switch { 3 => hiddenMoves, 4 => hiddenMoves4, _ => [] };
+    if (source.Moves.Where(hidden.Contains).ToArray() is { Length: > 0 } forgotten)
+    {
+        source.SetMoves(source.Moves.Where(m => m != 0 && !hidden.Contains(m)).ToArray());
+        source.FixMoves();
+        notes.Add($"Forgot {string.Join(", ", forgotten.Select(m => strings.movelist[m]))}");
+    }
+    source.RefreshChecksum();
+    // HOME's games replace moves a game lacks; a move its own game never allowed is no such move.
+    if (new LegalityAnalysis(source) is { Valid: false } own)
+        throw new InvalidDataException(Plain(own));
+    var refusals = new List<string>();
+    foreach (var key in new[] { "frlg", "sv", "swsh", "bdsp", "pla", "za" })
+    {
+        var tracker = (ulong)Random.Shared.NextInt64(1, long.MaxValue);
+        var owner = Trainer(games[key], new JsonObject { ["trainer"] = request["trainers"]![key]!.DeepClone() }).Item2;
+        var (pk, la, refusal) = Converted(source.Clone(), games[key], tracker, owner, true);
+        if (pk is null || la is null || refusal.Length > 0)
+        {
+            refusals.Add(refusal.Split('\n')[0]);
+            continue;
+        }
+        if (!pk.Moves.SequenceEqual(source.Moves))
+            notes.Add("New moves for its new game");
+        return (key, pk, la, notes);
+    }
+    // A game HOME cannot reach or without the species says least; PKHeX's own reason says most.
+    throw new InvalidDataException(
+        refusals.FirstOrDefault(r => !r.StartsWith("HOME cannot send") && !r.EndsWith("not in that game."))
+        ?? (refusals.Any(r => r.EndsWith("not in that game."))
+            ? $"{strings.specieslist[source.Species]} is in no game HOME can send it to."
+            : "HOME cannot send it into a game the bank holds."));
 }
 
 ulong Tracker(JsonObject request) => ulong.Parse((string?)request["tracker"] ?? "0");
@@ -590,16 +829,19 @@ JsonObject Destinations(Game game, JsonObject request)
     var reply = new JsonObject();
     foreach (var (key, to) in games)
     {
-        string refusal;
+        string refusal, state = "";
         try
         {
-            refusal = Moved(game, to, data, tracker, Trainer(to, request).Item2).Refusal;
+            var (pk, la, why) = Moved(game, to, data, tracker, Trainer(to, request).Item2);
+            refusal = why;
+            if (pk is not null && la is not null)
+                state = TrackerState(pk, la);
         }
         catch (Exception e)
         {
             refusal = e.Message;
         }
-        reply[key] = new JsonObject { ["ok"] = refusal.Length == 0, ["reason"] = refusal };
+        reply[key] = new JsonObject { ["ok"] = refusal.Length == 0, ["reason"] = refusal, ["home_tracker"] = state };
     }
     return new JsonObject { ["games"] = reply };
 }
@@ -616,8 +858,16 @@ JsonObject Paste(Game game, JsonObject request)
     var blank = game.Blank();
     var dummied = MoveInfo.GetDummiedMovesHashSet(game.Context);
     var errorText = BattleTemplateParseErrorLocalization.Get();
-    foreach (var set in ShowdownParsing.GetShowdownSets(lines))
+    // A set is a run of lines between blank ones, as PKHeX's parser splits them.
+    var blocks = new List<List<string>> { new() };
+    foreach (var line in lines)
+        if (!string.IsNullOrWhiteSpace(line))
+            blocks[^1].Add(line);
+        else if (blocks[^1].Count > 0)
+            blocks.Add([]);
+    foreach (var block in blocks.Where(b => b.Count > 0))
     {
+        var set = ShowdownParsing.GetShowdownSets(block).Single();
         var errors = new JsonArray();
         var notes = new JsonArray();
         foreach (var invalid in set.InvalidLines)
@@ -701,8 +951,11 @@ JsonObject Paste(Game game, JsonObject request)
             notes.Add("Gigantamax and Dynamax level are not set.");
         if (set.HiddenPowerType >= 0 && blank.Format < 8)
             notes.Add("Hidden Power follows the IVs; its type is not set.");
-        if (set.Friendship != 255)
-            notes.Add("Friendship is not set.");
+        // Showdown leaves out a friendship of 255, its default; a set asks for one only by naming it, so an
+        // event Pokemon whose friendship is fixed still builds from a set that does not.
+        if (block.Any(line => BattleTemplateLocalization.GetAll().Values
+                .Any(l => l.Config.TryParse(line.Trim(), out _) == BattleTemplateToken.Friendship)))
+            options["friendship"] = set.Friendship;
         sets.Add(new JsonObject
         {
             ["species"] = name,
@@ -782,8 +1035,278 @@ JsonObject Event(Game game, JsonObject request)
     };
 }
 
+// A game's Mystery Gift Pokemon in PKHeX's own event database, eggs left out, each under a key that names it
+// across PKHeX updates: its card, species, form and Tera type (one Mew card holds eighteen, one per type). Two
+// records under one key differ only in what the Pokemon does not carry, such as the card's revision.
+IEnumerable<(string Key, MysteryGift Gift)> GiftEvents(Game game)
+{
+    MysteryGift[] table = game.Context switch
+    {
+        EntityContext.Gen7b => EncounterEvent.MGDB_G7GG,
+        EntityContext.Gen8 => EncounterEvent.MGDB_G8,
+        EntityContext.Gen8a => EncounterEvent.MGDB_G8A,
+        EntityContext.Gen8b => EncounterEvent.MGDB_G8B,
+        EntityContext.Gen9 => EncounterEvent.MGDB_G9,
+        EntityContext.Gen9a => EncounterEvent.MGDB_G9A,
+        _ => throw new ArgumentException("PKHeX has no Mystery Gift Pokemon for this game."),
+    };
+    var seen = new HashSet<string>();
+    foreach (var gift in table.Where(g => g.IsEntity && !g.IsEgg))
+    {
+        var key = $"{gift.CardID:0000}-{gift.Species}-{gift.Form}"
+                  + (gift is ITeraTypeReadOnly tera ? $"-{(int)tera.TeraType}" : "");
+        if (seen.Add(key))
+            yield return (key, gift);
+    }
+}
+
+// The day a card's distribution opened, where PKHeX holds it.
+static DateOnly? GiftDate(MysteryGift gift)
+{
+    var window = default(DistributionWindow);
+    var known = gift switch
+    {
+        WB7 g => EncounterServerDate.GetDistributionWindow(g, out window),
+        WC8 g => EncounterServerDate.GetDistributionWindow(g, out window),
+        WA8 g => EncounterServerDate.GetDistributionWindow(g, out window),
+        WB8 g => EncounterServerDate.GetDistributionWindow(g, out window),
+        WC9 g => EncounterServerDate.GetDistributionWindow(g, out window),
+        WA9 g => EncounterServerDate.GetDistributionWindow(g, out window),
+        _ => false,
+    };
+    return known && window.Start.Year > 1 ? window.Start : null;
+}
+
+// The game's Mystery Gift Pokemon, newest first, each made as the request's trainer would receive it: its OT and
+// language when the card fixes them, what it holds, knows and is caught in, whether the copy is legal, and its HOME
+// tracker under the app's setting (MendGift).
+JsonObject GiftEventList(Game game, JsonObject request)
+{
+    var (versions, trainer) = Trainer(game, request);
+    var items = strings.GetItemStrings(game.Context, versions[0]);
+    var list = new List<(DateOnly? Date, JsonObject Entry)>();
+    foreach (var (key, gift) in GiftEvents(game))
+    {
+        var (pk, la) = MakeGift(gift, versions, trainer);
+        (pk, la, var refused) = InTrainerLanguage(gift, pk, la, trainer);
+        var moves = new JsonArray();
+        foreach (var move in pk.Moves)
+            if (move != 0)
+                moves.Add(strings.movelist[move]);
+        var date = GiftDate(gift);
+        list.Add((date, new JsonObject
+        {
+            ["key"] = key, ["card_id"] = gift.CardID, ["title"] = gift.CardTitle.Trim(),
+            ["date"] = date?.ToString("yyyy-MM-dd") ?? "",
+            ["species"] = strings.specieslist[gift.Species], ["species_id"] = gift.Species,
+            ["form"] = gift.Form == 0 ? "" : ShowdownParsing.GetStringFromForm(gift.Form, strings, gift.Species, game.Context),
+            ["level"] = pk.CurrentLevel,
+            // Never, may be (rolled like a wild one) or always.
+            ["shiny"] = gift.Shiny switch
+            {
+                Shiny.Never => "never", Shiny.Random => "random",
+                Shiny.FixedValue => pk.IsShiny ? "always" : "never", _ => "always",
+            },
+            ["tera"] = gift is ITeraTypeReadOnly tera ? strings.types[(int)tera.TeraType] : "",
+            ["ot"] = YourOT(pk, trainer) ? "" : pk.OriginalTrainerName,
+            ["language"] = pk.Language == trainer.Language ? 0 : pk.Language,
+            ["ball"] = strings.balllist[pk.Ball],
+            ["held_item"] = pk.HeldItem == 0 ? "" : items[pk.HeldItem],
+            ["moves"] = moves,
+            ["legal"] = Accepted(la) && refused.Length == 0,
+            ["refused"] = refused,
+            ["home_tracker"] = TrackerState(pk, la),
+        }));
+    }
+    return new JsonObject
+    {
+        ["events"] = new JsonArray(list.OrderByDescending(e => e.Date ?? DateOnly.MinValue)
+            .Select(e => (JsonNode?)e.Entry).ToArray()),
+    };
+}
+
+// A fresh copy of one of the game's Mystery Gift Pokemon, as the request's trainer receives it, for a trade to pass
+// on (docs/gift_simulated.md), legal under the app's HOME tracker setting (MendGift). `refused` says why no save
+// like the trainer's received a card that gives the receiver's own trainer, "" when one did: the copy names that
+// save as its OT, so it must be one the card reached, on the save's version when made for it alone
+// ("only_version", ReachedVersion) and in its language (InTrainerLanguage). A card with its own trainer is never
+// refused: its copy is a traded Pokemon, which any save may hold.
+JsonObject GiftEvent(Game game, JsonObject request)
+{
+    var key = (string)request["key"]!;
+    var gift = GiftEvents(game).FirstOrDefault(e => e.Key == key).Gift
+               ?? throw new ArgumentException($"PKHeX has no Mystery Gift Pokemon {key} for this game.");
+    var (versions, trainer) = Trainer(game, request);
+    var (pk, la) = MakeGift(gift, versions, trainer);
+    var refused = "";
+    if (YourOT(pk, trainer))
+    {
+        if (versions.Length < game.Versions.Length && !ReachedVersion(gift, versions[0]))
+            refused = NeverTo(gift, game.Versions.Where(version => ReachedVersion(gift, version)), versions[0]);
+        else if (Accepted(la))
+            (pk, la, refused) = InTrainerLanguage(gift, pk, la, trainer);
+        else if (game.Versions.Except(versions).Where(version => Accepted(MakeGift(gift, [version], trainer).Legality))
+                     .ToArray() is { Length: > 0 } elsewhere)
+            refused = NeverTo(gift, elsewhere, versions[0]);
+    }
+    if (!Accepted(la) && refused.Length == 0)
+        throw new InvalidDataException($"PKHeX made an illegal {strings.specieslist[gift.Species]} from card "
+                                       + $"{gift.CardID}: {Plain(la).Replace("\n", " ")}");
+    var reply = Describe(game, pk, la);
+    reply["key"] = key;
+    reply["title"] = gift.CardTitle.Trim();
+    // A copy legal only with a handler cannot go to its own trainer: that save clears the handler as it receives
+    // it (docs/sv.md, What a trade rewrites), and PKHeX then refuses it (HOME's starters on Scarlet/Violet, Z-A).
+    reply["handled"] = YourOT(pk, trainer) && pk.CurrentHandler == 1;
+    reply["your_ot"] = YourOT(pk, trainer) && pk.CurrentHandler == 0;
+    reply["refused"] = refused;
+    return reply;
+}
+
+// A card that gives the receiver's own trainer, not one of its own: the copy carries the trainer it was made for.
+static bool YourOT(PKM pk, ITrainerInfo trainer) => pk.OriginalTrainerName == trainer.OT && pk.TID16 == trainer.TID16;
+
+// Whether saves of `version` received the card. HOME's (cards 9000 on) reached either version's saves, whatever
+// origin they fix. Any other card that fixes the Pokemon's origin reached that version's alone (Scarlet/Violet's
+// card 1540: Violet a Koraidon, Scarlet a Miraidon); otherwise its own restriction says (PKHeX's
+// CanBeReceivedByVersion): Scarlet/Violet's RestrictVersion (1 Scarlet, 2 Violet), Let's Go's IRestrictVersion.
+static bool ReachedVersion(MysteryGift gift, GameVersion version) => gift switch
+{
+    { CardID: >= 9000 } => true,
+    WC9 { OriginGame: not 0 } card => (GameVersion)card.OriginGame == version,
+    WB8 { OriginGame: not 0 } card => (GameVersion)card.OriginGame == version,
+    WC9 { RestrictVersion: 1 } => version == GameVersion.SL,
+    WC9 { RestrictVersion: 2 } => version == GameVersion.VL,
+    IRestrictVersion restricted => restricted.CanBeReceivedByVersion(version),
+    _ => true,
+};
+
+static string NeverTo(MysteryGift gift, IEnumerable<GameVersion> reached, GameVersion version) =>
+    $"card {gift.CardID} gave it to {string.Join(" and ", reached.Select(VersionName))} alone, never to "
+    + VersionName(version);
+
+// A card that gives the receiver's own trainer reaches a save in that trainer's language, and the copy is in it.
+// Where the card fixes another (Let's Go's Chinese Meltan and Melmetal, cards 1501 and 1502), the copy in the
+// trainer's language is checked: legal, it is the copy; refused, no save in that language received the card, and
+// -> why, with the copy as the card makes it. A card with its own trainer keeps its language, whoever receives it.
+(PKM Pokemon, LegalityAnalysis Legality, string Refused) InTrainerLanguage(MysteryGift gift, PKM pk,
+    LegalityAnalysis la, ITrainerInfo trainer)
+{
+    if (!Accepted(la) || !YourOT(pk, trainer) || pk.Language == trainer.Language)
+        return (pk, la, "");
+    var copy = pk.Clone();
+    copy.Language = trainer.Language;
+    if (!copy.IsNicknamed)
+        copy.ClearNickname();
+    var checkedCopy = Refresh(copy);
+    return Accepted(checkedCopy)
+        ? (copy, checkedCopy, "")
+        : (pk, la, $"card {gift.CardID} gave it in {LanguageName(pk.Language)} alone, never to a save in "
+                   + LanguageName(trainer.Language));
+}
+
+static string LanguageName(int language) => language switch
+{
+    1 => "Japanese", 2 => "English", 3 => "French", 4 => "Italian", 5 => "German", 7 => "Spanish", 8 => "Korean",
+    9 => "Simplified Chinese", 10 => "Traditional Chinese", 11 => "Latin American Spanish",
+    _ => $"language {language}",
+};
+
+static string VersionName(GameVersion version) => version switch
+{
+    GameVersion.GP => "Let's Go Pikachu", GameVersion.GE => "Let's Go Eevee", GameVersion.BD => "Brilliant Diamond",
+    GameVersion.SP => "Shining Pearl", GameVersion.PLA => "Legends Arceus", GameVersion.SL => "Scarlet",
+    GameVersion.VL => "Violet", GameVersion.ZA => "Legends Z-A", _ => version.ToString(),
+};
+
+// A gift made on each of the game's versions in turn (some cards come to one version only), rolled again where its
+// own check refuses a PID. The first legal copy is kept.
+(PKM Pokemon, LegalityAnalysis Legality) MakeGift(MysteryGift gift, GameVersion[] versions, ITrainerInfo trainer)
+{
+    PKM? pk = null;
+    LegalityAnalysis? la = null;
+    foreach (var version in versions)
+    {
+        var receiver = new SimpleTrainerInfo(version)
+        {
+            OT = trainer.OT, TID16 = trainer.TID16, SID16 = trainer.SID16,
+            Language = trainer.Language, Gender = trainer.Gender,
+        };
+        for (var roll = 0; roll < 8; roll++)
+        {
+            pk = gift.ConvertToPKM(receiver, EncounterCriteria.Unrestricted);
+            SetHomeIVs(gift, pk);
+            la = MendGift(pk, receiver);
+            if (Accepted(la))
+                return (pk, la);
+        }
+    }
+    return (pk!, la!);
+}
+
+// HOME's Legends Z-A starters (cards 9031-9033) have three perfect IVs and 20 in the rest, as PKHeX's check expects
+// [WA9.HomeBaseIV]; PKHeX 26.8.26 makes them with one perfect IV and the rest at 0.
+static void SetHomeIVs(MysteryGift gift, PKM pk)
+{
+    if (gift is not WA9 { IsHOMEGift: true, HomeBaseIV: > 0, FlawlessIVCount: > 0 } card ||
+        pk.FlawlessIVCount == card.FlawlessIVCount)
+        return;
+    var ivs = Enumerable.Repeat(card.HomeBaseIV, 6).ToArray();
+    foreach (var i in Enumerable.Range(0, 6).OrderBy(_ => Random.Shared.Next()).Take(card.FlawlessIVCount))
+        ivs[i] = 31;
+    pk.SetIVs(ivs);
+}
+
+// What the save that received a gift sets on it: a handler for one that arrives already handled, and the HOME
+// tracker of a gift HOME gave, which the "empty" setting leaves unset and "made" fills (docs/gui.md, The bank).
+// Unlike Mend, the event's own moves stay.
+LegalityAnalysis MendGift(PKM pk, ITrainerInfo trainer)
+{
+    var la = Refresh(pk);
+    if (!Accepted(la) && !OnlyTrackerMissing(la) && pk.HandlingTrainerName.Length == 0)
+    {
+        pk.CurrentHandler = 1;
+        pk.HandlingTrainerName = "POKELDN";
+        pk.HandlingTrainerGender = 0;
+        if (pk is IHandlerLanguage language)
+            language.HandlingTrainerLanguage = (byte)trainer.Language;
+        la = Refresh(pk);
+    }
+    if (!Accepted(la) && OnlyTrackerMissing(la) && pk is IHomeTrack { HasTracker: false } home)
+    {
+        home.Tracker = MadeTracker((ulong)Random.Shared.NextInt64(1, long.MaxValue));
+        HomeSeen(pk);
+        la = Refresh(pk);
+    }
+    return la;
+}
+
+// What HOME changes on a Pokemon it has seen, which PKHeX's check expects of one with a tracker: a Gen 9 Pokemon's
+// height copied from its scale (Legends Z-A's weight too), a Legends Z-A Alpha marked [HomeQuirks,
+// MiscScaleVerifier, MiscVerifierPA9].
+static void HomeSeen(PKM pk)
+{
+    switch (pk)
+    {
+        case PK9 sv:
+            sv.HeightScalar = sv.Scale;
+            break;
+        case PA9 za:
+            za.HeightScalar = za.WeightScalar = za.Scale;
+            if (za.IsAlpha)
+                za.RibbonMarkAlpha = true;
+            break;
+    }
+}
+
 // The items a Sword/Shield gift may give or a gifted Pokemon may hold; the GUI lists the same set.
 static IReadOnlySet<ushort> GiftItems() => ItemStorage8SWSH.GetAllHeld().ToHashSet();
+
+// A Gigantamax form: the species Max Soup changes (Gigantamax.CanToggle) and Melmetal, whose factor came only from
+// Pokemon GO. The factor stays through evolution: Sword's card 1641 gave it to a Bulbasaur for its Venusaur.
+static bool CanGigantamax(ushort species, byte form) =>
+    species == (ushort)PKHeX.Core.Species.Melmetal || Gigantamax.CanToggle(species, form) ||
+    EvolutionTree.Evolves8.Forward.GetEvolutions(species, form).Any(e => Gigantamax.CanToggle(e.Species, e.Form));
 
 static IReadOnlySet<ushort> RaidRewardItems()
 {
@@ -817,8 +1340,8 @@ JsonObject Gift(byte[] data)
         if (data[0x243] > 3 || (data[0x246] > 24 && data[0x246] != 255) ||
             data[0x247] > 4 || data[0x248] > 4 || data[0x24A] > 10)
             throw new InvalidDataException("Invalid gift gender, nature, ability, shininess or Dynamax level.");
-        if (data[0x24B] > 1 || (data[0x24B] == 1 && !Gigantamax.CanToggle(card.Species, card.Form)))
-            throw new InvalidDataException("This species has no Gigantamax form.");
+        if (data[0x24B] > 1 || (data[0x24B] == 1 && !CanGigantamax(card.Species, card.Form)))
+            throw new InvalidDataException("Neither this species nor its evolutions have a Gigantamax form.");
     }
     else if (card.IsItem)
     {
@@ -965,22 +1488,33 @@ JsonObject Describe(Game game, PKM pk, LegalityAnalysis la)
         ["shiny"] = pk.IsShiny,
         ["nickname"] = pk.Nickname,
         ["ot"] = pk.OriginalTrainerName,
+        ["ot_gender"] = pk.OriginalTrainerGender,
         ["trainer_id"] = pk.DisplayTID,
         ["secret_id"] = pk.DisplaySID,
         ["nature"] = strings.natures[(int)pk.StatAlignment],
         ["ball"] = strings.balllist[pk.Ball],
         ["ability"] = game.Context == EntityContext.Gen9a ? "" : strings.abilitylist[pk.Ability],
         ["held_item"] = pk.HeldItem == 0 ? "" : strings.GetItemStrings(game.Context, game.Versions[0])[pk.HeldItem],
+        ["held_item_id"] = pk.HeldItem,
         ["moves"] = moves,
+        ["move_ids"] = new JsonArray(pk.Moves.Where(m => m != 0).Select(m => (JsonNode?)(int)m).ToArray()),
         ["pid"] = pk.PID,
         ["encryption_constant"] = pk.EncryptionConstant,
         ["tracker"] = (pk is IHomeTrack home ? home.Tracker : 0).ToString(),
         ["encounter"] = la.EncounterOriginal.LongName,
         ["parsed"] = la.Parsed,
-        ["legal"] = la.Valid,
+        ["home_tracker"] = TrackerState(pk, la),
+        ["legal"] = Accepted(la),
         ["report"] = la.Report(),
+        ["problems"] = Accepted(la) ? "" : Plain(la),
     };
 }
+
+// "made" for a tracker this request filled, "empty" for one PKHeX wants and the record lacks.
+string TrackerState(PKM pk, LegalityAnalysis la)
+    => pk is IHomeTrack { HasTracker: true } home && madeTrackers.Contains(home.Tracker) ? "made"
+       : la.Results.Any(r => r.Result == LegalityCheckResultCode.TransferTrackerMissing) ? "empty"
+       : "";
 
 static byte[] EncryptedStored(PKM pk)
 {
@@ -1005,7 +1539,7 @@ static byte[] DecryptedParty(PKM pk)
 
 // The offer options a request asks for; a stat array is HP, Atk, Def, SpA, SpD, Spe and -1 leaves a stat alone.
 record Wish(Nature? Nature, int? Ability, Gender? Gender, int[] IVs, int[] Effort, int? Item, byte? Ball,
-            byte? Form, ushort[] Moves)
+            byte? Form, byte? Friendship, ushort[] Moves)
 {
     static readonly string[] Stats = ["hp", "atk", "def", "spa", "spd", "spe"];
     static readonly string[] StatNames = ["HP", "Attack", "Defense", "Sp. Atk", "Sp. Def", "Speed"];
@@ -1024,6 +1558,8 @@ record Wish(Nature? Nature, int? Ability, Gender? Gender, int[] IVs, int[] Effor
             throw new ArgumentException("An IV is at most 31 and an effort value at most 252.");
         if (Number("nature") is < 0 or > 24)
             throw new ArgumentException("Unknown nature.");
+        if (Number("friendship") is < 0 or > 255)
+            throw new ArgumentException("Friendship is at most 255.");
         ushort[] moves = o?["moves"] is JsonArray list
             ? [.. list.Select(m => checked((ushort)(int)m!)).Where(m => m != 0).Distinct()] : [];
         if (moves.Length > 4)
@@ -1031,7 +1567,7 @@ record Wish(Nature? Nature, int? Ability, Gender? Gender, int[] IVs, int[] Effor
         return new Wish(Number("nature") is { } n ? (Nature)n : null, Number("ability"),
             Number("gender") is { } g ? (Gender)g : null, ivs, effort,
             Number("held_item"), Number("ball") is { } b ? checked((byte)b) : null,
-            Number("form") is { } f ? checked((byte)f) : null, moves);
+            Number("form") is { } f ? checked((byte)f) : null, (byte?)Number("friendship"), moves);
     }
 
     public ushort[] Moveset() => [.. Moves, .. new ushort[4 - Moves.Length]];
@@ -1078,6 +1614,10 @@ record Wish(Nature? Nature, int? Ability, Gender? Gender, int[] IVs, int[] Effor
             pk.HeldItem = item;
         if (Ball is { } ball)
             pk.Ball = ball;
+        // The original trainer's: a console whose player is not the original trainer writes its handler's
+        // as the species' base friendship (docs/architecture.md, Offer options).
+        if (Friendship is { } friendship)
+            pk.OriginalTrainerFriendship = friendship;
         ApplyEffort(pk);
         // Gen 3 and 4 raise an EV past 100 (the vitamin cap) only in battle, so the record must have gained
         // experience since it was met; one point stays below the next level.
@@ -1129,6 +1669,8 @@ record Wish(Nature? Nature, int? Ability, Gender? Gender, int[] IVs, int[] Effor
             return $"a {strings.balllist[ball]}";
         if (Form is { } form && pk.Form != form)
             return "this form";
+        if (Friendship is { } friendship && pk.OriginalTrainerFriendship != friendship)
+            return $"friendship {friendship}";
         foreach (var move in Moves)
             if (!pk.HasMove(move))
                 return $"the move {strings.movelist[move]}";

@@ -1,7 +1,9 @@
 """A standard or black-crystal Tera Raid from its 32-bit seed: the encounter that a game version, a
 region, the story progress and the crystal colour select, the boss's PK9 fields, and the ordered
 rewards (docs/sv_raid.md, The seed). The RNG is PKHeX's `Encounter9RNG` and `Tera9RNG`; the tables
-are `data/raid_base.json` (scripts/gen_sv_raid_data.py).
+are `data/raid_base.json` (scripts/gen_sv_raid_data.py) over `data/species.json`
+(scripts/gen_sv_species_data.py). An event raid's encounter (`pokeldn.sv.raid_event`) goes through
+the same boss and reward draws, with the fields its table fixes.
 """
 
 from dataclasses import dataclass
@@ -10,6 +12,7 @@ import json
 import os
 
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "raid_base.json")
+SPECIES = os.path.join(os.path.dirname(DATA), "species.json")
 MASK64 = (1 << 64) - 1
 
 VERSIONS = ("scarlet", "violet")
@@ -35,20 +38,43 @@ RATE_TOTALS = {
     ("blueberry", "scarlet"): (1100, 1100, 2000, 1900, 2100, 2600),
     ("blueberry", "violet"): (1100, 1100, 2000, 1900, 2100, 2600),
 }
-# Lottery reward counts per star level, by the seed's hundred-sided roll [Tera-Finder RewardUtil.cs].
+# Lottery reward counts per star level, by the seed's hundred-sided roll [Tera-Finder RewardUtil.cs];
+# a seven-star event raid draws as a six-star one.
 REWARD_SLOTS = ((4, 5, 6, 7, 8), (4, 5, 6, 7, 8), (5, 6, 7, 8, 9), (5, 6, 7, 8, 9),
-                (6, 7, 8, 9, 10), (7, 8, 9, 10, 11))
+                (6, 7, 8, 9, 10), (7, 8, 9, 10, 11), (7, 8, 9, 10, 11))
 REWARD_COLUMNS = (10, 40, 70, 90)
 # The Tera Shard item per Tera type, in type order.
 TERA_SHARDS = (1862, 1868, 1871, 1869, 1870, 1874, 1873, 1875, 1878,
                1863, 1864, 1866, 1865, 1872, 1867, 1876, 1877, 1879)
 REWARD_MATERIAL, REWARD_SHARD = 1, 2
+# A retail host's bonus rows after the lottery: three more draws under subject 4 (kept per Raid Power
+# level), the Tera Shards RaidGemItemRewardBoost gives stars 1 to 7 under subject 5 (Glimmering Charm).
+SUBJECT_POWER, SUBJECT_CHARM = 4, 5
+POWER_DRAWS = 3
+SHARD_BOOST = (0, 0, 2, 5, 10, 12, 0)
 TOXTRICITY = 849
 # Toxtricity's nature comes from its form's list [ToxtricityUtil.cs].
 TOXTRICITY_NATURES = ((3, 4, 2, 8, 9, 19, 22, 11, 13, 14, 0, 6, 24),
                       (1, 5, 7, 10, 12, 15, 16, 17, 18, 20, 21, 23))
 GENDER_CUTOFF = {0x1F: 12, 0x3F: 25, 0x7F: 50, 0xBF: 75, 0xE1: 89}
 TERA_NONE = 19          # a PK9's Tera override when none applies
+TERA_TYPES = ("Normal", "Fighting", "Flying", "Poison", "Ground", "Rock", "Bug", "Ghost", "Steel",
+              "Fire", "Water", "Grass", "Electric", "Psychic", "Ice", "Dragon", "Dark", "Fairy")
+NATURES = ("Hardy", "Lonely", "Brave", "Adamant", "Naughty", "Bold", "Docile", "Relaxed", "Impish",
+           "Lax", "Timid", "Hasty", "Serious", "Jolly", "Naive", "Modest", "Mild", "Quiet", "Bashful",
+           "Rash", "Calm", "Gentle", "Sassy", "Careful", "Quirky")
+# A raid table's shiny rule (RareType): drawn, never, always.
+SHINY_RANDOM, SHINY_NEVER, SHINY_ALWAYS = 0, 1, 2
+# A raid table's scale rule (SizeType): 0 two draws as height and weight, 1 to 5 one draw in a band
+# (range, base), 6 the table's own value [PKHeX SizeType9.GetSizeValue].
+SCALE_BANDS = {1: (0x10, 0), 2: (0x20, 0x10), 3: (0xA0, 0x30), 4: (0x20, 0xD0), 5: (0x10, 0xF0)}
+SCALE_RANDOM, SCALE_VALUE = 0, 6
+# A row's `boss_desc` (docs/sv_raid.md, The battle bootstrap): the shield's HP and time triggers at
+# words 1 and 2, six extra actions (action, timing, value, move) from word 10. An extra action's
+# code and its timing's, by name.
+SHIELD_TRIGGERS, EXTRA_ACTIONS = 1, 10
+ACTIONS = {1: "boss_reset", 2: "player_reset", 3: "move", 4: "drain"}
+TIMINGS = {1: "time", 2: "hp"}
 
 
 class Xoroshiro:
@@ -76,8 +102,13 @@ class Xoroshiro:
 
 @cache
 def tables():
+    """-> raid_base.json with species.json's personal entries, move PP and names, every species' and
+    move's."""
     with open(DATA, encoding="utf-8") as fh:
-        return json.load(fh)
+        data = json.load(fh)
+    with open(SPECIES, encoding="utf-8") as fh:
+        every = json.load(fh)
+    return {**data, **{key: every[key] for key in ("personal", "move_pp", "species_names")}}
 
 
 def personal(species, form=0):
@@ -143,21 +174,35 @@ def select(seed, version, map_name, progress, content):
 
 
 def tera_type(seed, row):
-    """-> the boss's Tera type: the table's own, one of the species' types, or any of 18."""
+    """-> the boss's Tera type: the table's own, or any of 18."""
+    # Table values 0 and 1 both draw any of 18 (0xe27414); docs/sv_raid.md, The seed.
     if row["tera"] >= 2:
         return row["tera"] - 2
-    rand = Xoroshiro(seed)
-    if row["tera"] == 1:
-        return rand.next_int(18)
-    return personal(row["species"], row["form"])[1][rand.next_int(2)]
+    return Xoroshiro(seed).next_int(18)
+
+
+def battle_pid(pid, fake_id, shiny):
+    """-> the PID the boss fights with under its table's shiny rule against the fake trainer: a
+    shiny draw turned away, or the draw made the square sparkle; a drawn rule keeps the draw
+    [Encounter9RNG.GetAdaptedPID, its battle half]."""
+    tid, sid, low = fake_id & 0xFFFF, fake_id >> 16, pid & 0xFFFF
+    sparkles = (tid ^ sid ^ (pid >> 16) ^ low) < 16
+    if shiny == SHINY_NEVER and sparkles:
+        return pid ^ 0x10000000
+    if shiny == SHINY_ALWAYS and not sparkles:
+        return ((tid ^ sid ^ low) << 16) | low
+    return pid
 
 
 def boss_fields(seed, row):
-    """-> the boss's `pokeldn.gen9.write` fields; every field not named stays zero."""
+    """-> the boss's `pokeldn.gen9.write` fields; every field not named stays zero. What an event
+    row fixes takes no draw: `ivs` (HP Atk Def SpA SpD Spe), `gender`, `nature`, a `scale_type` of
+    a band or a value; its `shiny` rule adjusts the PID and its `held_item` is the boss's."""
     base, _types, ratio, friendship, growth, abilities = personal(row["species"], row["form"])
     rand = Xoroshiro(seed)
-    ec, fake_id, pid = rand.next_int(), rand.next_int(), rand.next_int()
-    ivs = [None] * 6                    # HP Atk Def SpA SpD Spe, the draw's order
+    ec, fake_id = rand.next_int(), rand.next_int()
+    pid = battle_pid(rand.next_int(), fake_id, row.get("shiny", SHINY_RANDOM))
+    ivs = list(row.get("ivs") or [None] * 6)          # HP Atk Def SpA SpD Spe, the draw's order
     for _ in range(row["flawless_ivs"]):
         index = rand.next_int(6)
         while ivs[index] is not None:
@@ -166,16 +211,28 @@ def boss_fields(seed, row):
     ivs = [rand.next_int(32) if iv is None else iv for iv in ivs]
     ability = {0: lambda: rand.next_int(2), 1: lambda: rand.next_int(3),
                2: lambda: 0, 3: lambda: 1, 4: lambda: 2}[row["ability"]]()
-    gender = (2 if ratio == 0xFF else 1 if ratio == 0xFE else 0 if ratio == 0
-              else int(rand.next_int(100) < GENDER_CUTOFF[ratio]))
-    if row["species"] == TOXTRICITY:
+    if row.get("gender") is not None:
+        gender = row["gender"]
+    else:
+        gender = (2 if ratio == 0xFF else 1 if ratio == 0xFE else 0 if ratio == 0
+                  else int(rand.next_int(100) < GENDER_CUTOFF[ratio]))
+    if row.get("nature") is not None:
+        nature = row["nature"]
+    elif row["species"] == TOXTRICITY:
         table = TOXTRICITY_NATURES[row["form"]]
         nature = table[rand.next_int(len(table))]
     else:
         nature = rand.next_int(25)
     height = rand.next_int(0x81) + rand.next_int(0x80)
     weight = rand.next_int(0x81) + rand.next_int(0x80)
-    scale = rand.next_int(0x81) + rand.next_int(0x80)
+    scale_type = row.get("scale_type", SCALE_RANDOM)
+    if scale_type == SCALE_VALUE:
+        scale = row["scale"]
+    elif scale_type == SCALE_RANDOM:
+        scale = rand.next_int(0x81) + rand.next_int(0x80)
+    else:
+        span, low = SCALE_BANDS[scale_type]
+        scale = rand.next_int(span) + low
     ivs = (ivs[0], ivs[1], ivs[2], ivs[5], ivs[3], ivs[4])
     party = stats(base, ivs, row["level"], nature, row["evs"])
     return {
@@ -191,37 +248,78 @@ def boss_fields(seed, row):
         "move_pp": tuple(tables()["move_pp"][str(move)] for move in row["moves"]),
         "current_hp": party[0], "stats": party, "ot_friendship": friendship,
         "nickname": tables()["species_names"][str(row["species"])],
-        "language": 2, "affixed_ribbon": -1,
+        "language": 2, "affixed_ribbon": -1, "held_item": row.get("held_item", 0),
     }
 
 
-def rewards(seed, row, stars):
-    """-> [(item, quantity)]: the encounter's fixed rows, then the seed's lottery draws."""
+def reward_rows(seed, row, stars, fixed=None, lottery=None):
+    """-> [(item, quantity, rare, subject)] as a retail host writes a RaidPoint's rows: the fixed
+    rows with their table subject, the seed's lottery draws, then the bonus rows
+    (docs/sv_raid.md, The battle bootstrap). `fixed` and `lottery` are the reward tables by name,
+    the base game's unless an event brings its own."""
     data = tables()
     gem = tera_type(seed, row)
     out = []
 
-    def add(entry):
+    def add(entry, subject):
         item = entry["item"] or {
             REWARD_MATERIAL: int(data["material_items"].get(str(row["species"]), 0)),
             REWARD_SHARD: TERA_SHARDS[gem]}.get(entry["category"], 0)
-        if item:
-            out.append((item, entry["amount"]))
+        if item and entry["amount"]:
+            out.append((item, entry["amount"], entry.get("rare", 0), subject))
 
-    for entry in data["fixed_rewards"][row["fixed_rewards"]]:
-        add(entry)
-    lottery = data["lottery_rewards"][row["lottery_rewards"]]
-    total = sum(entry["probability"] for entry in lottery)
-    rand = Xoroshiro(seed)
-    roll = rand.next_int(100)
-    count = REWARD_SLOTS[stars - 1][sum(roll >= edge for edge in REWARD_COLUMNS)]
-    for _ in range(count):
-        threshold = rand.next_int(total)
-        for entry in lottery:
-            if entry["probability"] > threshold:
-                add(entry)
-                break
-            threshold -= entry["probability"]
+    fixed = data["fixed_rewards"] if fixed is None else fixed
+    lottery = data["lottery_rewards"] if lottery is None else lottery
+    # An event's record can name a table its delivery lacks; a lottery without weight draws nothing
+    # (a draw under a total of 0 never ends).
+    for entry in fixed.get(row["fixed_rewards"], ()):
+        add(entry, entry.get("subject", 0))
+    draws = lottery.get(row["lottery_rewards"], ())
+    total = sum(entry["probability"] for entry in draws)
+    if total:
+        rand = Xoroshiro(seed)
+        roll = rand.next_int(100)
+        count = REWARD_SLOTS[stars - 1][sum(roll >= edge for edge in REWARD_COLUMNS)]
+        for draw in range(count + POWER_DRAWS):
+            threshold = rand.next_int(total)
+            for entry in draws:
+                if entry["probability"] > threshold:
+                    add(entry, 0 if draw < count else SUBJECT_POWER)
+                    break
+                threshold -= entry["probability"]
+    if SHARD_BOOST[stars - 1]:
+        out.append((TERA_SHARDS[gem], SHARD_BOOST[stars - 1], 0, SUBJECT_CHARM))
+    return out
+
+
+def rewards(seed, row, stars, fixed=None, lottery=None):
+    """-> [(item, quantity)]: the fixed rows and the seed's lottery draws, without the bonus rows."""
+    return [(item, quantity) for item, quantity, _, subject in reward_rows(seed, row, stars, fixed, lottery)
+            if subject < SUBJECT_POWER]
+
+
+@dataclass(frozen=True)
+class Action:
+    """A scripted action the boss takes in battle: `shield`, `boss_reset`, `player_reset`, `move` or
+    `drain` (the Tera Orb's charge), a move action's move, and the (`hp` or `time`, percent left)
+    triggers that bring it, either one."""
+    kind: str
+    move: int
+    triggers: tuple
+
+
+def scripted_actions(row):
+    """-> the boss's scripted actions: the shield, then the extra actions in table order. An action
+    at 0% left never comes, the battle being over; a move action that names no move is left out."""
+    desc = row["boss_desc"]
+    shield = tuple((timing, percent) for timing, percent
+                   in zip(("hp", "time"), desc[SHIELD_TRIGGERS:SHIELD_TRIGGERS + 2]) if percent)
+    out = [Action("shield", 0, shield)] if shield else []
+    for at in range(EXTRA_ACTIONS, EXTRA_ACTIONS + 24, 4):
+        action, timing, percent, move = desc[at:at + 4]
+        kind = ACTIONS.get(action)
+        if kind and timing in TIMINGS and percent and (move or kind != "move"):
+            out.append(Action(kind, move if kind == "move" else 0, ((TIMINGS[timing], percent),)))
     return out
 
 
@@ -236,6 +334,7 @@ class Raid:
     row: dict
     boss: dict
     rewards: tuple
+    rows: tuple = ()      # reward_rows: what a RaidPoint carries, bonus rows included
 
     @property
     def species(self):
@@ -251,6 +350,10 @@ class Raid:
         return (b["trainer_id"] ^ b["secret_id"] ^ (b["pid"] >> 16) ^ (b["pid"] & 0xFFFF)) < 16
 
     @property
+    def actions(self):
+        return scripted_actions(self.row)
+
+    @property
     def context(self):
         return {"version": self.version, "map_name": self.map_name, "progress": self.progress,
                 "content": self.content}
@@ -260,5 +363,6 @@ def generate(seed, version="violet", map_name="paldea", progress="4star", conten
     """-> the Raid a console in that state makes of the seed."""
     seed &= 0xFFFFFFFF
     row, stars = select(seed, version, map_name, progress, content)
+    rows = tuple(reward_rows(seed, row, stars))
     return Raid(seed, version, map_name, progress, content, stars, row, boss_fields(seed, row),
-                tuple(rewards(seed, row, stars)))
+                tuple((r[0], r[1]) for r in rows if r[3] < SUBJECT_POWER), rows)

@@ -670,27 +670,47 @@ id in bits 0-14, count in bits 15-29, bit 30 the new-item flag. The save block i
 
 ## Official event cards
 
-The desktop app's Official events mode offers 171 cards from projectpokemon EventsGallery
+The desktop app's Official events mode offers 189 cards from projectpokemon EventsGallery
 (`pokeldn/swsh/data/events.json`, built by `scripts/gen_swsh_events.py` from a folder of its `.wc8`
 files; `pokeldn/swsh/events.py` reads it). Each one is sent as it was distributed, byte for byte.
 
 | group | cards |
 |---|---|
-| Pokemon | 87 |
+| Pokemon | 89 |
+| Pokemon HOME | 16 |
 | Items | 69 |
 | Clothing | 9 |
 | Battle Points | 6 |
 
 Of the gallery's 949 Sword/Shield cards, all 949 pass the validator `0x010b5de0`. Left out: 740
 whose gift repeats a kept card with only the date or card id changed (mostly ranked-battle rewards),
-24 simulated cards, 12 whose items are ★ dummies, and 2 HOME Gigantamax gifts of a species with no
-Gigantamax form, which the PKHeX check refuses.
+12 whose items are ★ dummies, and the first revision of 8 Pokemon HOME cards.
+
+The PKHeX check takes a Gigantamax factor on a species whose evolution has a Gigantamax form, as
+cards 1641 and 1642 gave it to Bulbasaur and Squirtle, and on Melmetal, which Max Soup leaves alone
+(`CanGigantamax` in `services/pkhex/Program.cs`); any other species is refused.
+
+### Pokemon HOME
+
+Pokemon HOME gave its gifts into its own boxes, not as Wonder Cards. The group holds the community's
+cards of them, the gallery's `HOME Simulated WCs` for Sword/Shield (card ids 9000 and up, PKHeX's
+`WC8.IsHOMEGift`), each byte for byte a card PKHeX's event database holds. They are listed under
+projectpokemon's titles: the HOME starters Bulbasaur, Charmander and Squirtle with their hidden
+ability, the first login Pikachu, the National Dex Magearna, the first Wonder Box Eevee, the first GTS
+Rotom, the first challenge Pichu, the hidden ability Grookey, Scorbunny and Sobble, the shiny Zeraora,
+the Pokemon GO Melmetal, the Gigantamax Bulbasaur and Squirtle, and the shiny Keldeo. The first
+revision of cards 9000 to 9007 fixes every PID at 0; the second, kept, has the game roll one.
+
+A Pokemon received from one carries no HOME tracker, which PKHeX requires of a gift HOME gave: the
+console makes the Pokemon, so PKHeX flags the missing tracker whatever the HOME tracker setting
+([The HOME tracker setting](gui.md#the-home-tracker-setting)), and Pokemon HOME currently accepts it.
+The app outlines these cards in amber and says so.
 
 The flags at `+0x10` set how often a console takes a card ([What the menu refuses](#what-the-menu-refuses)):
 
 | flags | cards | receipt |
 |---|---|---|
-| bit 0 | 112 | once per card id, refused afterwards with message 7 |
+| bit 0 | 130 | once per card id, refused afterwards with message 7 |
 | bit 2 | 13 | once per card date, at most ten a day |
 | neither | 46 | every time |
 
@@ -806,7 +826,20 @@ item 9999 as given.
 The one species test is in the PokemonParam constructor `0x777f40` (`0x778118..0x778148`): a
 species whose personal entry has bit 6 of byte 0x21 clear (`0x764990`, `0x77f530`) gets bit 2 of
 the record's `+0x04` word set (`0x76eb40`). With that bit set, every accessor reads and writes a
-static stand-in whose species is 0x383 (`0x776c50`). A species above 898 reads personal entry 0,
+static stand-in whose species is 0x383 (`0x776c50`, filled by `0x776bc0`). The bit is the game's
+bad-egg flag: `0x77d610(pp, mode)` reads it through `0x767f40` (mode 0 an egg and not bad, mode 1
+bad, mode 2 either), and `0x77f600` names any species above 0x382 with text 0, "Egg" in the 1.3.2
+English `monsname.dat`. Nothing on the menu's path refuses such a card: the validator `0x010b5de0`
+reads the species only in its checksum and header copy (`0x010b59b8`), none of the branches of
+`0x01014a60` reads it, the party add `0x7840f0` takes species 0x383, Pokedex registration returns on
+the egg byte (`0x01434b24`), and the copy `0x766390` keeps the raw 0x148 bytes with the flag and the
+record's species. Under unicorn, species 19 and 493 come out flagged and species 25 and 1000 do not;
+the validator accepts the Rattata record. An emulated French Shield 1.3.2 given that record
+(species 19, absent) listed it as "Rattata", played the reveal through, showed "Vous avez reçu un
+Rattata !" and filed "Rattata" in its album, and put in the party an entry named "Egg" with an egg
+model, language tag ANG and every summary field blank. The game saved on receipt; the party slot
+kept species 19 with bit 2 of `+0x04` set. A species above 898
+ reads personal entry 0,
 which is marked present, and a form at or above the species' form count reads the base species, so
 neither is flagged. Never send a species absent from Sword and Shield; the PKHeX check in the
 desktop app refuses one.

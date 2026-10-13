@@ -20,11 +20,28 @@ a `.pokegift` or, by its extension, a `.wc3` (FireRed/LeafGreen) or `.wc8` (Swor
 [Mystery Gift files](gifts.md#desktop-app) describes the forms, cartridge variants and native-format
 conversion.
 
+## First launch
+
+- macOS: the app is unsigned. Open it once and close the warning, then open System Settings →
+  Privacy & Security → Security → Open Anyway next to pokeldn. Confirm with your password.
+  Later launches open normally.
+- Windows: extract the zip and run `pokeldn.exe` inside the `pokeldn` folder. Keep `_internal`
+  beside it. If SmartScreen blocks the app, choose More info → Run anyway.
+  See [Windows USB drivers](#windows-usb-drivers) if the board has no COM port.
+- Linux: install GTK 3 and libsecret if your distribution does not include them. Serial access
+  needs `sudo usermod -aG dialout $USER` (`uucp` on Arch); log out and back in after changing groups.
+  See [Linux serial ports](#linux-serial-ports) for missing ports and brltty conflicts.
+
 ## Your trainer
 
-Settings, Your trainer is the original trainer of every Pokemon the app builds: a name, a language
-and two ID pairs, entered as the games show them. A record stores the trainer as a 16-bit TID and a
-16-bit SID, the low and high halves of one 32-bit id.
+Settings, Your trainer is the original trainer of every Pokemon the app builds: a name, a gender, a
+language and two ID pairs, entered as the games show them. Legends Z-A takes a received Pokemon as its
+player's own only when the original trainer's gender, IDs and name match
+([the received record](za.md#what-the-trade-writes-into-a-received-record)). Legends Arceus's data
+exchange record carries that gender and a look that matches it
+([the record](pla.md#the-games-reader-and-the-pre-handler-phase)); on retail trades the screen
+showed the partner's gender nowhere. A record stores the trainer as a
+16-bit TID and a 16-bit SID, the low and high halves of one 32-bit id.
 
 | games | ID shown | secret ID | stored id |
 |---|---|---|---|
@@ -132,7 +149,7 @@ folder instead.
 | step | what happens |
 |---|---|
 | a trade completes | the session panel reads each received file with PKHeX and banks a copy; the Received file stays; bytes already in the bank are not banked twice |
-| a Pokemon is banked | its `.json` keeps the species, the summary, PKHeX's verdict, the source file, a SHA-256 of the bytes and a random 63-bit HOME tracker |
+| a Pokemon is banked | its `.json` keeps the species, the summary, PKHeX's verdict, the source file, a SHA-256 of the bytes, a random 63-bit HOME tracker for a move under "made", and `home_tracker`: `empty`, `made` or empty |
 | the page lists the destinations | the helper's `destinations` command tries a move to all seven games and reports each refusal |
 | a destination's trade tool is chosen | the helper's `move` command converts the record, the result joins that tool's offer queue with `"bank": id`, and the app opens the tool |
 | the run's trade N completes | the `[done] trade N complete` line removes the banked Pokemon queued as trade N; at the run's end its queue entry goes too |
@@ -140,10 +157,11 @@ folder instead.
 
 A move goes through PKHeX's own HOME conversion (`EntityConverter.ConvertToType`, through `PKH`), then
 PKHeX's legality check in the destination game; a move that is not legal there is refused with
-PKHeX's reason. On the way:
+PKHeX's reason, its per-move lines folded into one ("2 of its moves are not legal") and each problem
+listed once. On the way:
 
-- A Pokemon from another game takes the bank's HOME tracker. PKHeX marks one without a tracker
-  invalid (`HomeTrackerUtil.IsRequired`, `HOMETransferSettings.HOMETransferTrackerNotPresent`).
+- A Pokemon from another game gets the HOME tracker the [HOME tracker
+  setting](#the-home-tracker-setting) asks for: none, or the bank's.
 - The app's trainer becomes its handler, as a save it is moved into would (`IHandlerUpdate`, and
   `PB8.UpdateHandler`). When the check still finds it invalid with its own trainer as the current
   handler, the app's trainer is set as the handling trainer; Sword/Shield asks for it.
@@ -153,29 +171,106 @@ PKHeX's reason. On the way:
 
 | refusal | source |
 |---|---|
-| nothing goes back to FireRed/LeafGreen or to Let's Go | `EntityConverter.IsConvertibleToFormat` |
+| nothing goes back to FireRed/LeafGreen | `EntityConverter.IsConvertibleToFormat` |
+| nothing goes to Let's Go | HOME only takes from it; the converter alone takes a `PK3` into `PB7`, Let's Go's format (7) being above FireRed's (3) |
 | an egg | HOME's screen for FireRed and LeafGreen; the converter would hatch it |
 | a FireRed/LeafGreen Pokemon holding an item or knowing an HM move | HOME's screen for FireRed and LeafGreen |
 | a species or form absent from the destination | the destination's personal table |
 | no conversion route | PKHeX.Core 26.8.26 converts no Legends Z-A record out to another game |
 
+Edit changes what a player can change in the game itself: the nickname (empty restores the species
+name), the level (upward only), the moves and the held item. The helper's `check` command applies the
+fields and runs PKHeX's legality check; an edit that would make a legal Pokemon not legal is refused and
+the record is left as it was. A saved edit rewrites the record and its `.json` (summary, verdict,
+SHA-256) and the destinations are checked again. A Pokemon queued for a trade is not editable.
+
+### The HOME tracker setting
+
+PKHeX marks a Pokemon invalid when it lacks a HOME tracker it needs (`HomeTrackerUtil.IsRequired`,
+`LegalityCheckResultCode.TransferTrackerMissing`, severity `HOMETransferTrackerNotPresent`): one moved
+into another game, and an event gift that reached its game only through HOME. HOME 3.1.0 and later refuse
+a tracker HOME did not issue (error 10015). Settings, advanced settings, HOME tracker picks what the app
+puts there (`Settings.home_tracker`); `pokeldn.pokemon.Service` sends it as `home_tracker` with every
+helper request, and a run inherits it as `POKELDN_HOME_TRACKER`.
+
+| setting | bank move, import, and the builder's gift repair | legality | warning shown |
+|---|---|---|---|
+| `empty` (default) | the tracker stays unset | the missing tracker is accepted when it is PKHeX's only problem; every other problem is refused | PKHeX flags the missing HOME tracker |
+| `made` | a random 63-bit tracker, the bank's for a banked Pokemon | unchanged | Can't be deposited in HOME |
+
+Every helper reply carries `home_tracker` (`empty`, `made` or empty), and `destinations` gives it per
+game. The warning shows on a built or loaded offer, a bank entry, a bank destination and an import line.
+An unset tracker can change other verdicts: PKHeX 26.8.26 refuses the Hidden Ability of the Black 2 Patrat
+in `tests/data/bank_import.json` moved into Legends Z-A without a tracker, and accepts it with one.
+
+Mystery Gift - Simulated follows the setting too ([Mystery Gift - Simulated](#mystery-gift---simulated)).
+Among the gifts, PKHeX wants a tracker only on one HOME gave: under `empty` its copy has none, under
+`made` a made one (`MendGift` in `services/pkhex/Program.cs`). A made tracker comes with what HOME
+changes on a Pokemon it has seen, which PKHeX's check expects of one with a tracker
+[HomeQuirks]:
+a Scarlet/Violet Pokemon's height is its scale, a Legends Z-A one's height and weight, and a Legends Z-A
+Alpha carries the Alpha mark (`HomeSeen`). PKHeX.Core 26.8.26 holds 16 such gifts for Sword/Shield, 4
+each for Brilliant Diamond/Shining Pearl, Legends Arceus and Legends Z-A, and 5 for Scarlet/Violet, and
+every gift passes the check under either setting. The Sword/Shield Mystery Gift sends its 16 as the
+community's cards (Official events, Pokemon HOME): the console makes the Pokemon, so it never carries a
+tracker, whatever the setting ([Pokemon HOME](swsh_gift.md#pokemon-home)).
+
+### Importing
+
+The Bank page's plus button, or a file dropped on its grid, imports a Pokemon file or a game save. The
+helper's `import` command reads the file with PKHeX: `SaveUtil.TryGetSaveFile` first, the file name
+helping (a 3DS save is a file named `main` with no extension), then `FileUtil.TryGetPKM` for a single
+record of any format PKHeX knows (`.pk1` to `.pk9`, `.pb7`, `.pb8`, `.pa8`, `.pa9`, `.ck3`, `.xk3`,
+`.bk4`, `.rk4` and the rest). A save gives each occupied party slot, then each occupied box slot. The
+file is only read.
+
+| record | what the bank keeps |
+|---|---|
+| of a game the bank holds (`PK3`, `PB7`, `PK8`, `PB8`, `PA8`, `PK9`, `PA9`) | the record as it is, held item and moves included, when PKHeX finds it legal |
+| any other format | the record with its held item taken off, as a Pokemon enters HOME without one, and, in a Gen 3 or Gen 4 record, its HM moves forgotten, as Pal Park and Poke Transfer refuse them; when PKHeX then finds it legal, it moves as a bank move would to the first game that takes it, in the order FireRed/LeafGreen, Scarlet/Violet, Sword/Shield, Brilliant Diamond/Shining Pearl, Legends Arceus, Legends Z-A |
+
+A record PKHeX finds not legal in its own format is refused with PKHeX's reason; the move's moveset
+suggestion never stands in for a move the record's own game did not allow. A record with a bad checksum,
+an egg of another game and a species no reachable game holds are refused too. The `.json` of an
+imported Pokemon carries `imported`: the file name, the slot, the source format and what was taken off.
+
+`Bank/.imported` holds one key per imported record: the SHA-256 of its decrypted stored bytes, before
+anything is taken off. A record whose key is there is not imported again, even once a trade has taken it
+out of the bank; a record whose bytes are already banked is not banked twice. A save imported again after
+the game was played brings in only the records that changed.
+
+A Ditto imported from a FireRed save completed a trade into a retail Scarlet from the Bank page, and
+importing that save again banked none of its 104 records.
+
 A record received from a retail Sword and moved to Legends Z-A, with the bank's tracker and its PID
 kept, showed its level and original trainer on a retail Z-A's trade box and completed the trade.
 
 `tests/test_bank.py` moves records between six pairs of games through the real helper and checks
-that the destination's launcher takes them, along with each refusal and the run that takes a traded
-Pokemon out of the bank.
+that the destination's launcher takes them, along with each refusal, an edit kept and refused, and the
+run that takes a traded Pokemon out of the bank. It imports a Black 2 save, a Gen 4 and a Gen 6 file built by
+PKHeX's encounter generator (`tests/data/bank_import.json`): the held item and the HM go,
+an illegal record is refused, and a second import banks nothing.
 
 ### Unresolved
 
-- Whether Pokemon HOME accepts a Pokemon that carries a tracker the bank made, or one moved by the
-  bank, when it is later deposited there. Nothing has been sent to HOME.
+- Whether Pokemon HOME accepts a Pokemon the bank moved with a made tracker. HOME 3.1.0 and later
+  refuse a tracker HOME did not issue (error 10015), and a made tracker is of that kind.
+- Whether HOME accepts an empty tracker on a Pokemon moved into a different game.
 - Whether HOME's own FireRed/LeafGreen import rules go beyond the eggs, held items and HM moves its
   screen names.
 - Which record field carries the origin icon HOME shows on a Pokemon imported from the Switch
   FireRed/LeafGreen, which a cartridge Pokemon moved through Pokemon Bank lacks (players' screenshots,
   unmeasured here). PKHeX.Core 26.8.26 converts a `.pk3` by the Pal Park lineage, so a bank move from
   FireRed/LeafGreen may differ from the record HOME writes.
+
+## The GTS
+
+The GTS page lists other players' open listings, filtered by the species offered or wanted, and the
+player's own listings and offers under Yours. Deposit a Pokemon takes a legal banked Pokemon that is
+not queued for a trade; a listing's detail offers each banked Pokemon that answers it. While listed or
+offered, a Pokemon is in `Documents/pokeldn/GTS`, out of the bank. The app answers offers whenever it
+runs, on any page, once a listing or an offer exists. The events and the rules are in
+[The GTS](online.md#the-gts).
 
 ## Boards and firmware
 
@@ -203,8 +298,10 @@ the loader's port, and flashes with `--from-loader`.
 
 The Control page presses a Switch's buttons through a board running the controller firmware
 ([Controller board](hardware_pad.md)) and plays macros on it. Install the Controller firmware from
-the Board page (ESP32-S3 or classic ESP32), plug the board into the Switch's USB-C port, and press
-Connect: the page reaches the board over Bluetooth LE.
+the Board page (ESP32-S3 or classic ESP32). An ESP32-S3 goes into the Switch's USB-C port, and
+Connect reaches it over Bluetooth LE. A classic ESP32 stays on this computer's USB and pairs with the
+Switch from HOME, Controllers, Change Grip/Order; Connect reaches it over its serial port. Installing
+the firmware again clears the pairing.
 
 The status line says where the board is: plugged into this computer (it is on this computer's USB
 bus), into the Switch (its USB is configured and it is not on this computer's bus), or into neither.
@@ -247,8 +344,9 @@ them. An app that finds a service running other code
 
 The sprites are the 96x96 PNGs behind `sprites.front_default` and `sprites.front_shiny` of
 `https://pokeapi.co/api/v2/pokemon/{id}`, read from `raw.githubusercontent.com/PokeAPI/sprites`
-(`sprites/pokemon/{id}.png`, `sprites/pokemon/shiny/{id}.png`). The JSON (300 KB per species) is not fetched; the sprite path is fixed by the id. Twelve National Dex numbers sampled from 1 to 1025
-all have both sprites; 1026 returns 404. When a shiny sprite is missing, the normal one is shown.
+(`sprites/pokemon/{id}.png`, `sprites/pokemon/shiny/{id}.png`). The JSON (300 KB per species) is not
+fetched; the sprite path is fixed by the id. All 1,025 National Dex numbers have both sprites; 1026
+returns 404. When a shiny sprite is missing, the normal one is shown.
 
 | where | size |
 |---|---|
@@ -257,10 +355,10 @@ all have both sprites; 1026 returns 404. When a shiny sprite is missing, the nor
 | Session panel, Offering: each queued offer in trade order, its summary as a tooltip | 46 px tile |
 | Session panel, Received: each Pokemon file the run saved, read by PKHeX, with its summary | 46 px tile |
 
-Sprites are drawn with nearest-neighbour filtering at 1:1, never at a size in between. A 46 px tile
-crops the canvas around the visible pixels (`pokeldn.app.sprites.bounds`) and draws them at 1:1 when
-they fit in 46 px, else at 1:2. Of 33 sprites sampled, the visible box ran from 36x29 (Eevee) to the
-full 96 px width (Lugia, Reshiram). At 1:2 a sprite lands on whole device pixels of a 2x display.
+A 96 px sprite is the whole canvas at 1:1, nearest-neighbour. A 46 px tile crops the canvas around the
+visible pixels (`pokeldn.app.sprites.bounds`) and scales them, smoothed, until the longer side is
+40 px, so every tile shows its Pokemon at one size. Visible boxes run from 28 px (Togepi) to the full
+96 px width (Lugia); a fixed 1:1 or 1:2 choice drew a 50 px sprite at 50 px and a 56 px one at 28.
 
 The Received list matches files by the run's `{stamp}`, which every tool's output path carries; a
 launcher adds `-N` for trade N (`pokeldn.pokemon.trade_path`) or writes into a folder or prefix so
@@ -276,12 +374,145 @@ A sprite downloads on first use and is read from disk afterwards, with no networ
 | no network, nothing cached | the pixelarticons `circle-question` icon; no error; the next attempt waits 60 s |
 | HTTP 404 | a `{id}.none` marker; not asked again for 7 days |
 | reply that is not a PNG, or over 200 KB | not cached |
+| PNG with a colour profile, text or other extra chunks | saved and shown without them: only IHDR, PLTE, tRNS, IDAT and IEND are kept (26 of the 2,050 sprites, most of them Gen 9) |
 | damaged cached file | deleted, downloaded again |
 | data folder not writable | the sprite shows for the session and is not saved |
 | Settings, Pokemon sprites off | the cache is read, nothing is downloaded |
 
 Settings has the switch and a button that empties the cache. `POKELDN_SPRITE_BASE` replaces the sprite
 host, for tests (`tests/test_sprites.py`).
+
+## Raid events
+
+The Scarlet/Violet Tera Raid (Host) tool's Raid event card hosts a raid from Project Pokemon's
+[EventsGallery](https://github.com/projectpokemon/EventsGallery) ([Event raids](sv_raid.md#event-raids)).
+The app keeps its own copy of the gallery's raid events in `EventsGallery/` in its data folder
+(`pokeldn.app.events_gallery`); Clear local files leaves it.
+
+| action | what happens |
+|---|---|
+| Download | asks `api.github.com` for the newest commit of master that changed `Released/Gen 9/SV/Raid Events`, downloads `codeload.github.com/projectpokemon/EventsGallery/zip/<commit>` (22 MB, October 2026) and unpacks each event's four tables of its newest patch, about 17 MB; `gallery.json` keeps the commit and its date |
+| Check for updates | one request for that newest commit; an update when it differs from the copy's. A change elsewhere in the gallery is none |
+| Update | the download again |
+
+A new copy replaces the old one only once complete; a failed or cancelled download leaves the old
+one. An event's folder name reaches 152 characters, so on Windows the app opens the files as `\\?\`
+paths.
+
+The event list holds every event of the copy but `000 Base Data`, the game's own table: 152 on
+2026-09-06, newest first, the arrow beside it turning the order. Each entry is the folder's name
+without its number (a round, "Event · Round") over its bosses; typing filters on both. Choosing one:
+
+- The raid card offers the game versions the event spawns in, Paldea alone, the progresses at which
+  the chosen crystal draws, and in place of Crystal the event's crystals for that version, each a
+  delivery group with its stars and bosses ("7 stars: Charizard", "4-5 stars: Florges, Mimikyu"). A
+  value the event cannot spawn moves to the nearest one it can (`raid_event.constrain`).
+- Find a raid searches the event's crystals only, one progress per stage, with its bosses as
+  species, and its Rewards section offers the items and quantities of the event's own reward tables
+  ([Finding a seed](sv_raid.md#finding-a-seed); `gui/views/reward_filter.py`). Its Size mark
+  eligibility greys out a mark no boss of the chosen crystal, stars and species can take
+  ([Size marks](sv_raid.md#size-marks)).
+- An event with a boss a save catches once shows "Let it be caught again" (`--raid-catch-normal`),
+  unchecked at each launch and for each event chosen ([Event raids](sv_raid.md#event-raids)).
+
+Folding the card sets its event aside (`#raid-event-folded` in the tool's values,
+`GamesView.show_raid_event`): the raid card, Find a raid and the command are a standard raid's, and
+the header reads "Off: Event". Unfolding brings the event back. The card opens at launch when an
+event is in use. An event the copy lacks (not downloaded, or an update dropped it) stays chosen: the
+header reads "Missing: Event" in red, and the run refuses it until the copy has it or another event
+is chosen (`pokeldn.app.command.code_error`).
+
+## Raid NPC partners
+
+The Tera Raid (Host) tool's Raid NPC partners card, below Consoles joining, chooses the NPC trainers
+who fill the slots the consoles leave empty: two with one console joining, one with two, none with
+three ([Partners](sv_raid.md#partners); `gui/views/raid_partners.py`). With nothing chosen it passes
+nothing, and the host draws them from the story progress's pool as a console does.
+
+- Partners' progress: the five unlock stages, Beginning left out, starting on the story progress's
+  (six stars for a black crystal or a seven-star event raid). Another stage passes
+  `--raid-partner-progress`.
+- The stage's trainers, three cards to a row, two in a narrow window. A card shows the trainer and
+  the Pokemon, its level (four fifths of Our Pokemon's, `command.raid_pokemon_level`) and Tera type
+  as chips, then its ability and its three moves, one to a line. A partner raiders favour ends on a
+  strip tinted gold or silver with a star and why ([Favoured partners](sv_raid.md#favoured-partners));
+  its tooltip says why at more length.
+
+A click seats a trainer, numbered by the slot it takes; a second click leaves the slot to the draw.
+Each pick passes `--raid-partner`, in order. Raising Consoles joining drops the last pick, and a
+pick the chosen stage lacks (Dylan or Luke below four stars) is dropped. Folding only hides the card
+(`GamesView.show_raid_partners`): the choice still goes to the raid, and the header names it.
+
+## Mystery Gift - Simulated
+
+The Mystery Gift - Simulated tool's card, on Let's Go, Brilliant Diamond/Shining Pearl, Legends
+Arceus, Scarlet/Violet and Legends Z-A, lists the game's gift Pokemon from PKHeX's event table
+([Simulated Mystery Gifts](gift_simulated.md#the-gifts); `gui/views/event_gifts.py`). Tiles go two
+to a row, newest first: a sprite, the card's title, then the Pokemon, whose it is and when it was
+given; a hover shows the moves. Twenty-four show at a time, Show more adds as many, and a search
+narrows them by any word a tile shows, the ball, a move or the card number. Ten tiles or fewer show
+whole; more scroll in a box of their own (`event_gifts.FIT`).
+
+A click makes a fresh copy for the trainer in Settings and keeps it with the built Pokemon. It becomes
+the trade's offer, shown under the list with its legality, moves and OT. A copy keeps the trainer it
+was made with: pick the gift again after changing the trainer. A gift that names its receiver but
+never reached saves in the trainer's language, such as Let's Go's Chinese Meltan and Melmetal for any
+other, has an illegal tile that says why, and a click on it says so and keeps the offer
+([Saves a card reached](gift_simulated.md#saves-a-card-reached)). With Made for the receiving player
+(Advanced tab) on, the default, the trade makes a gift that names its receiver again for the console's own save
+([Made for the receiving player](gift_simulated.md#made-for-the-receiving-player)). A gift with its
+card's own trainer goes as made: picking it turns the switch off, disabled and faded, and the note
+under it names that trainer (`command.locked`). The launch then passes no `--for-receiver`. Picking a
+gift that names its receiver gives the switch back as it was set.
+
+A gift HOME gave, on any game but Let's Go, has the tracker the HOME tracker setting gives it
+([The HOME tracker setting](#the-home-tracker-setting)). Its tile is outlined in amber and, as the
+chosen copy, shows the setting's warning: "PKHeX flags the missing HOME tracker" or "Can't be
+deposited in HOME". The trade offers it like any other
+([The copy a trade offers](gift_simulated.md#the-copy-a-trade-offers)).
+
+## Pop-ups
+
+A run the app started, another of its child processes, or the app's own code can put a pop-up over
+whatever page shows (`pokeldn.popup`, in the plugin API since 1.2). There are two kinds:
+
+| kind | buttons | callback |
+|---|---|---|
+| `acknowledge(title, text)` | one, `label` (OK) | `on_ack`: the button, Esc or a click outside |
+| `confirm(title, text, agree, disagree)` | agree and disagree, the caller's labels | `on_agree`, `on_disagree` or `on_dismiss`, which Esc and a click outside fire |
+
+Opening one never waits: it returns the pop-up's id, and the answer comes later as its callback. A
+callback runs on the thread that reads the app's answers, unless `set_dispatcher(dispatch)` hands it to the program's own loop; in the app, it runs on a worker
+thread so no callback stalls the window. A callback that raises prints its traceback.
+
+| option | what it does |
+|---|---|
+| `id` | names the pop-up among the program's own; one opened under the id of a pop-up still open replaces it in place, its callbacks dropped. Without one, a new id is made |
+| `tone` | `info`, `warning` or `error`, which pick the icon |
+
+`cancel(id)` closes a pop-up; none of its callbacks fires once `cancel` has returned, except one an
+earlier answer already handed to the dispatcher. A program holding 32
+pop-ups unanswered gets `RuntimeError`. A pop-up's header names the program that opened it: the
+tool, Board installer or Controller service, and nothing for the app's own.
+
+When a program exits, its confirmations close and its acknowledgements stay with no answer to go
+back. With no app (`available()` is false, as in a terminal), a pop-up is a `[pop-up]` line in the
+output, no answer comes, and it does not count toward the 32.
+
+`runner.Process(..., popups=app.popups, label=...)` sets `POKELDN_POPUPS=1` in the child. The child
+sends each pop-up as a `[popup]` line and a JSON object on stdout, which the app keeps out of the log
+and finds wherever in a line another thread's print left it; the app answers with
+`[popup] {"id", "n", "answer"}` on the child's stdin, which `pokeldn.app.runner.child` reads. `n`
+tells a pop-up from one opened again under its id, so a late answer to a replaced pop-up fires
+nothing. Code in the app reaches the manager directly (`popup.attach`). `pokeldn.app.popups.Manager`
+keeps the open pop-ups; `gui.popups.Dialogs` draws them. An app dialog's
+`page.pop_dialog()` closes the app's own top dialog, never a pop-up opened above it.
+
+Mystery Gift - Simulated raises a warning when a gift made for the receiving player goes with the
+trainer from Settings instead, saying why: the save names no one, or its copy stopped at the card,
+PKHeX, the offer check or the loader ([The trade](gift_simulated.md#the-trade)). There is one per
+console (`receiver_gift.pop_up`), a newer reason replacing the one open. The app raises its own for
+an update that did not install and for a plugin it turned off.
 
 ## Updates
 
@@ -322,9 +553,17 @@ archive: the check catches a corrupted or truncated download and does not authen
 | no network, HTTP error, reply that is not a release | nothing shown at launch; Check now says GitHub did not answer |
 | Settings, Updates off | no request at launch; Check now still asks |
 | no archive for this computer, or no `SHA256SUMS` in the release | Download opens the file or the release page |
-| a source checkout, a macOS app run from Downloads (App Translocation), a folder the user cannot write | Download, with the reason |
+| a source checkout, a macOS app run from Downloads (App Translocation), a macOS or Linux folder the user cannot write | Download, with the reason |
+| Windows, a folder the user cannot write (`C:\Program Files`) | Update now; Windows asks for administrator permission (UAC) before the helper starts, and a refusal leaves the app unchanged |
 | a session, flash or cleanup running | Update now asks to finish it first |
 | checksum mismatch or a failed download | nothing changes; the dialog offers Download |
+
+On Windows in a folder only an administrator may change, the helper starts through
+`ShellExecuteExW` with the `runas` verb, reads and writes its outcome beside the unpacked copy (an
+administrator's helper may run as another user), and opens the new app through Explorer, so it runs at
+the user's own level. `scripts/check_update.py ARCHIVE FOLDER` runs a packed app's own update against a
+release served on 127.0.0.1; the Update check workflow runs it on Windows (a user folder and
+`C:\Program Files`) and Linux from a Release run's archives.
 
 Settings, keys and received Pokemon live outside the app and stay. Whether macOS asks for App
 Management permission when the helper replaces an app in `/Applications` is unmeasured; a refusal

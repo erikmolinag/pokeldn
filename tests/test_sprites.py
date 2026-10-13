@@ -116,6 +116,29 @@ def test_a_reply_that_is_not_a_sprite_is_never_cached(host, tmp_path, body):
     assert not list(tmp_path.rglob("*.png"))
 
 
+def with_extras(data: bytes) -> bytes:
+    """`data` with the ancillary chunks PokeAPI's Gen 9 sprites carry (iCCP, zTXt, iTXt, tEXt, tIME), some twice."""
+    def chunk(kind, body):
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+    profile = chunk(b"iCCP", b"ICC Profile\0\0" + zlib.compress(b"\0" * 400))
+    text = (chunk(b"zTXt", b"Raw profile type exif\0\0" + zlib.compress(b"x" * 200)) * 2
+            + chunk(b"iTXt", b"XML:com.adobe.xmp\0\0\0\0\0<x/>") + chunk(b"tEXt", b"Software\0GIMP") * 2)
+    ihdr = 8 + 25
+    return data[:ihdr] + profile + text + data[ihdr:-12] + chunk(b"tIME", bytes(7)) + data[-12:]
+
+
+def test_a_sprite_with_a_colour_profile_and_text_is_kept_without_them(host, tmp_path):
+    """26 of PokeAPI's 2,050 sprites, Sprigatito, Quaxly and Miraidon among them, carry iCCP, zTXt or iTXt
+    chunks: the cache keeps the image and drops those unread."""
+    host.routes = {"/pokemon/906.png": (200, with_extras(png(6)))}
+    cache = sprites.SpriteCache(tmp_path, host.url)
+    assert cache.get(906) == png(6) == (tmp_path / "normal" / "906.png").read_bytes()
+    (tmp_path / "shiny").mkdir()
+    (tmp_path / "shiny" / "906.png").write_bytes(with_extras(png(7)))       # saved by an older version
+    assert sprites.SpriteCache(tmp_path, dead_url()).get(906, shiny=True) == png(7)
+    assert sprites.pixels(with_extras(png(6))) == sprites.pixels(png(6))
+
+
 def test_damaged_cache_file_is_replaced(host, tmp_path):
     (tmp_path / "normal").mkdir()
     (tmp_path / "normal" / "25.png").write_bytes(b"half a fi")
@@ -220,3 +243,25 @@ def test_bounds_undoes_each_scanline_filter(kind):
 def test_bounds_of_a_broken_png_is_none(data):
     assert sprites.bounds(png()) == (0, 0, 1, 1)
     assert sprites.bounds(data) is None
+
+
+def hostile_png(width=1, height=1, raw=b"", depth=8, color=6):
+    def chunk(kind, body):
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+    return (sprites.PNG + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, depth, color, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+
+
+@pytest.mark.parametrize("data", [
+    hostile_png(raw=b""), hostile_png(raw=b"\0" * 1_000_000),
+    hostile_png(width=0, raw=b"\0"), hostile_png(width=1000000, raw=b"\0"),
+    hostile_png(depth=0, raw=b"\0" * 5), hostile_png(raw=b"\x05\0\0\0\0"),
+    hostile_png(color=3, raw=b"\0\xff"), png()[:-1], png() + b"junk",
+    with_extras(png())[:45] + b"\xff" + with_extras(png())[46:],            # a skipped chunk still has its CRC
+])
+def test_hostile_pngs_are_rejected_without_rendering_or_caching(host, tmp_path, data):
+    assert not sprites.valid(data)
+    assert sprites.pixels(data) is None and sprites.bounds(data) is None
+    host.routes = {"/pokemon/25.png": (200, data)}
+    cache = sprites.SpriteCache(tmp_path, host.url)
+    assert cache.get(25) is None and not list(tmp_path.rglob("*.png"))

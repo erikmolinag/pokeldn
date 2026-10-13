@@ -2,6 +2,7 @@ import errno
 import os
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 import flet as ft
@@ -9,7 +10,9 @@ import serial
 
 from gui import board
 from gui.i18n import tr
-from pokeldn.app import settings, update
+from gui.popups import Dialogs
+from pokeldn import plugins, pokemon, popup
+from pokeldn.app import popups, settings, update
 from pokeldn.app.paths import SESSION
 from gui.views.widgets import on_ui
 
@@ -40,6 +43,8 @@ class App:
         self.page = page
         SESSION.mkdir(parents=True, exist_ok=True)
         self.settings = settings.load()
+        pokemon.SERVICE.home_tracker = self.settings.home_tracker
+        self.plugin_stopped = plugins.turn_off_the_one_that_stopped(self.settings)   # and watches this start
         self.picker = ft.FilePicker()
         self.clipboard = ft.Clipboard()
         self.launcher = ft.UrlLauncher()
@@ -55,6 +60,14 @@ class App:
         self.update_state = ""                                  # checking, current, available, offline
         self.update_listeners: list = []                        # called on the UI loop after a check
         self.trainer_listeners: list = []                       # called on the UI loop when my_trainer changes
+        self.plugin_updates: dict = {}                          # plugin id -> plugin_updates.Available
+        self.plugin_update_listeners: list = []                 # called on the UI loop after a check
+        self.gts = None                                         # gui.views.gts.service, once used
+        # Pop-ups (docs/gui.md, Pop-ups): a run's come through runner.Process; the app's own through
+        # pokeldn.popup, their callbacks on a worker so none stalls the UI.
+        self.popups = popups.Manager(Dialogs(page), call=self.ui)
+        answers = ThreadPoolExecutor(1, thread_name_prefix="popup")
+        popup.attach(self.popups.program("", lambda reply: answers.submit(popup.answered, reply)).take)
         threading.Thread(target=self._watch_controllers, daemon=True).start()
 
     def trainer_read(self, found: dict, source: str = "console") -> None:
@@ -85,6 +98,12 @@ class App:
     @property
     def busy(self) -> bool:
         return self.storage_busy or self.board_busy or bool(self.process and self.process.running)
+
+    def plugin_radio(self):
+        """The plugin radio Settings chose (pokeldn.plugins.Radio), or None for the board."""
+        if not self.settings.radio:
+            return None
+        return plugins.radio(self.settings.radio)
 
     def radio_port(self, present: list[board.Port] | None = None) -> str:
         """The chosen board if it is plugged in, else the only board present."""
@@ -222,6 +241,20 @@ class App:
             self.ui(lambda: self._update_done(found, state))
 
         threading.Thread(target=work, daemon=True).start()
+
+    def check_plugin_updates(self) -> None:
+        """Ask each installed plugin's update address for a newer version, in the background."""
+        def work():
+            from pokeldn.app import plugin_updates
+            found = plugin_updates.check(plugins.discover())
+            self.ui(lambda: self._plugin_updates_done(found))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _plugin_updates_done(self, found: dict) -> None:
+        self.plugin_updates = found
+        for listener in list(self.plugin_update_listeners):
+            listener()
 
     def _update_done(self, found, state: str) -> None:
         if state != "offline":   # a failed check keeps a release an earlier one found

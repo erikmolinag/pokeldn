@@ -62,7 +62,7 @@ for line in sys.stdin:
     assert len({row["process"] for row in recorded}) == requests
     assert all(row["request"] == {"cmd": "check", "game": "pla", "fresh": True,
                                   "data": base64.b64encode(REFERENCE_RECORD).decode(),
-                                  "fields": {"ot_name": "HOST"}} for row in recorded)
+                                  "fields": {"ot_name": "HOST"}, "home_tracker": "empty"} for row in recorded)
 
 
 @pytest.fixture(scope="module")
@@ -96,13 +96,13 @@ def test_creation_import_and_launcher_preparation_remain_legal(service, game):
 
 
 @pytest.mark.parametrize("game", FORMATS)
-def test_a_built_pokemon_shows_the_trainer_id_typed_in_settings(service, game):
+def test_a_built_pokemon_shows_the_trainer_typed_in_settings(service, game):
     """FireRed shows the 16-bit TID; a Switch title shows the 32-bit id as six digits and a secret ID,
-    here the largest pair 32 bits hold. PKHeX's DisplayTID reads them back."""
-    settings = Settings(tid=12345, sid=54321, switch_tid=967295, switch_sid=4294)
+    here the largest pair 32 bits hold. PKHeX's DisplayTID reads them back. Z-A matches the gender too."""
+    settings = Settings(tid=12345, sid=54321, switch_tid=967295, switch_sid=4294, gender=1)
     built = service.make(game, 25, settings.trainer(game))
     shown = (12345, 54321) if game == "frlg" else (967295, 4294)
-    assert (built["trainer_id"], built["secret_id"]) == shown and built["legal"]
+    assert (built["trainer_id"], built["secret_id"], built["ot_gender"]) == (*shown, 1) and built["legal"]
 
 
 def test_an_event_pokemon_offered_under_a_new_pid_keeps_its_own(service, capsys):
@@ -113,6 +113,21 @@ def test_an_event_pokemon_offered_under_a_new_pid_keeps_its_own(service, capsys)
     assert service.check_bytes("swsh", offer)["legal"]
     assert offer[:4] == base64.b64decode(built["data"])[:4]   # the encryption constant
     assert "kept its own PID" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("mode", ["empty", "made"])
+def test_an_event_that_reached_the_game_through_home_gets_the_tracker_the_setting_asks_for(service, monkeypatch,
+                                                                                         mode):
+    """Melmetal reached Sword only through HOME, so PKHeX wants a HOME tracker on it [HomeTrackerUtil]. "made"
+    fills one; "empty" leaves it unset, and that one problem is accepted there and by the launcher's check."""
+    monkeypatch.setattr(service, "home_tracker", mode)
+    built = service.make("swsh", 809, TRAINER)
+    assert built["legal"] and built["home_tracker"] == mode and (built["tracker"] != "0") == (mode == "made")
+    offer = Path(pokemon.prepare_file("swsh", built["file"])).read_bytes()
+    assert service.check_bytes("swsh", offer)["legal"]
+    monkeypatch.setattr(service, "home_tracker", "made")
+    refused = service.check_bytes("swsh", base64.b64decode(built["data"]))
+    assert refused["legal"] == (mode == "made") and refused["home_tracker"] == ("empty" if mode == "empty" else "")
 
 
 @pytest.mark.parametrize("game, species, edit", [
@@ -130,7 +145,6 @@ def test_an_event_pokemon_offered_under_a_new_pid_keeps_its_own(service, capsys)
     ("bdsp", 292, {}),                                   # Shedinja is genderless though Nincada is not
     ("za", 865, {}),                                     # Galarian Farfetch'd evolves into a species with one form
     ("bdsp", 350, {}),                                   # Milotic evolves at Beauty 170, which needs Sheen
-    ("swsh", 809, {}),                                   # an event that reached the game through HOME has a tracker
     ("za", 801, {}),                                     # a gift that arrives already handled
 ])
 def test_a_shiny_level_or_evolved_request_is_built_legal(service, game, species, edit):
@@ -204,6 +218,19 @@ def test_offer_options_land_in_the_record_the_launcher_sends(service, game):
     assert f["evs"] == (252, 0, 0, 4, 0, 0)
 
 
+@pytest.mark.parametrize("game, species, handled", [
+    ("swsh", 447, 0),      # Riolu, evolved at friendship 160 on level-up
+    ("sv", 447, 0),
+    ("bdsp", 68, 1),       # Machamp, a trade evolution: the build gains a handler, whose friendship is its own
+])
+def test_friendship_lands_in_the_original_trainers_byte(service, game, species, handled):
+    """A console keeps the original trainer's friendship when its player is that trainer (docs/architecture.md)."""
+    built = service.make(game, species, TRAINER, options={"friendship": 222})
+    offer = Path(pokemon.prepare_file(game, built["file"])).read_bytes()
+    f = gen9.read(gen9.load(offer)) if game == "sv" else gen8.read(gen8.load(offer))
+    assert built["legal"] and (f["current_handler"], f["ot_friendship"]) == (handled, 222)
+
+
 @pytest.mark.parametrize("game", ["frlg", "lgpe", "pla", "za"])
 def test_every_listed_ability_and_ball_builds_legal(service, game):
     listed = service.options(game, 25, TRAINER)
@@ -248,6 +275,179 @@ def test_corrupt_records_and_illegal_final_edits_are_refused(service):
     good = service.make("swsh", 25, TRAINER)
     with pytest.raises(pokemon.BuilderError, match="Unsupported edit"):
         service.prepare("swsh", base64.b64decode(good["data"]), fields={"imaginary": 1})
+
+
+HOME_GIFTS = {9021, 9022, 9023, 9024, 9035}   # Scarlet/Violet's gifts HOME gave, at PKHeX.Core 26.8.26
+
+
+def made_under(game, gifts, events, mode):
+    """Each of `events` reads legal; the gifts HOME gave have the tracker `mode` gives them, the others none."""
+    assert {e["card_id"] for e in events if e["home_tracker"]} == gifts
+    assert all(e["legal"] and e["home_tracker"] == (mode if e["card_id"] in gifts else "") for e in events)
+
+
+@pytest.mark.parametrize("mode", ["empty", "made"])
+def test_every_scarlet_violet_mystery_gift_pokemon_is_made_for_a_trade(service, monkeypatch, mode):
+    """Mystery Gift - Simulated (docs/gift_simulated.md): every Pokemon card PKHeX knows, newest first, made
+    fresh for the app's trainer, passes the check the host runs on its offer, under a new PID where
+    the card allows one. HOME's gifts get the HOME tracker the setting asks for (docs/gui.md, The HOME
+    tracker setting): none under "empty", a made one under "made"."""
+    monkeypatch.setattr(service, "home_tracker", mode)
+    events = service.gift_events("sv", TRAINER)
+    assert len(events) >= 100 and len({e["key"] for e in events}) == len(events)
+    dates = [e["date"] for e in events if e["date"]]
+    assert dates == sorted(dates, reverse=True)
+    made_under("sv", HOME_GIFTS, events, mode)
+    for event in events:
+        built = service.gift_event("sv", event["key"], TRAINER)
+        assert (built["legal"], built["home_tracker"]) == (True, event["home_tracker"]), event["title"]
+        assert (built["tracker"] != "0") == (built["home_tracker"] == "made"), event["title"]
+        assert built["species_id"] == event["species_id"]
+        offer = service.check_bytes("sv", Path(pokemon.prepare_file("sv", built["file"], fresh=True)).read_bytes())
+        assert offer["legal"], event["title"]
+
+
+OTHER_HOME_GIFTS = {"lgpe": set(), "bdsp": {9015, 9016, 9017, 9026}, "pla": {9018, 9019, 9020, 9027},
+                    "za": {9031, 9032, 9033, 9034}}   # at PKHeX.Core 26.8.26
+CHINESE_ONLY = {"1501-808-0", "1502-809-0"}     # Let's Go's Chinese Meltan and Melmetal, for the receiver's trainer
+
+
+@pytest.mark.parametrize("mode", ["empty", "made"])
+@pytest.mark.parametrize("game", OTHER_HOME_GIFTS)
+def test_every_mystery_gift_pokemon_of_the_other_switch_games_is_made_for_a_trade(service, monkeypatch, game, mode):
+    """Mystery Gift - Simulated on Let's Go, Brilliant Diamond/Shining Pearl, Legends Arceus and Legends Z-A
+    (docs/gift_simulated.md): every gift an English save received is made and passes the host's offer check under
+    a new PID, HOME's with the tracker the setting asks for. Let's Go's HOME Meltan keeps HOME's height and weight;
+    Z-A's HOME starters get HOME's IVs."""
+    monkeypatch.setattr(service, "home_tracker", mode)
+    events = service.gift_events(game, TRAINER)
+    assert len(events) >= 8 and len({e["key"] for e in events}) == len(events)
+    assert {e["key"] for e in events if e["refused"]} == (CHINESE_ONLY if game == "lgpe" else set())
+    events = [e for e in events if not e["refused"]]
+    made_under(game, OTHER_HOME_GIFTS[game], events, mode)
+    for event in events:
+        built = service.gift_event(game, event["key"], TRAINER)
+        assert (built["legal"], built["home_tracker"]) == (True, event["home_tracker"]), event["title"]
+        offer = service.check_bytes(game, Path(pokemon.prepare_file(game, built["file"], fresh=True)).read_bytes())
+        assert offer["legal"], event["title"]
+
+
+def test_a_mystery_gift_pokemon_keeps_what_its_card_gave(service, monkeypatch):
+    """The card's own trainer, moves and item, or the receiver's trainer where the card gave none; a
+    card one version received alone comes out legal; a HOME gift gets the tracker the setting asks for."""
+    events = {e["key"]: e for e in service.gift_events("sv", TRAINER)}
+    palafin = events["0503-964-0-10"]
+    assert (palafin["title"], palafin["ot"], palafin["held_item"], palafin["moves"]) == (
+        "Gavin’s Palafin Gift", "Gavin", "Mystic Water", ["Jet Punch", "Wave Crash", "Haze", "Protect"])
+    assert events["1501-25-0-2"]["ot"] == "" and events["1501-25-0-2"]["tera"] == "Flying"
+    assert service.gift_event("sv", "1501-25-0-2", TRAINER)["ot"] == TRAINER["ot"]
+    koraidon = service.gift_event("sv", "1540-1007-0-1", TRAINER)     # Violet's card
+    assert koraidon["legal"] and koraidon["shiny"] and koraidon["ot"] == "Paldea"
+    monkeypatch.setattr(service, "home_tracker", "empty")
+    home = service.gift_event("sv", "9021-906-0-11", TRAINER)
+    assert (home["legal"], home["home_tracker"], home["tracker"]) == (True, "empty", "0")
+    monkeypatch.setattr(service, "home_tracker", "made")
+    tracked = service.gift_event("sv", "9021-906-0-11", TRAINER)
+    assert (tracked["legal"], tracked["home_tracker"]) == (True, "made") and tracked["tracker"] != "0"
+    with pytest.raises(pokemon.BuilderError, match="no Mystery Gift Pokemon"):
+        service.gift_event("sv", "9999-1-0-0", TRAINER)
+
+
+def test_a_mystery_gift_pokemon_is_made_for_the_receiving_save(service):
+    """Made for the receiving player (docs/gift_simulated.md): a card that gives the receiver's trainer says so, and
+    with `version` the copy is made on that version alone, as that save receives it; a card that fixes its
+    version keeps it, and one with its own trainer is never refused."""
+    save = {"ot": "Nemona", "tid": 4660, "sid": 66, "language": 5, "gender": 1}
+
+    def made(key, version):
+        reply = service.gift_event("sv", key, save, version=version, keep=False)
+        return reply, gen9.read(gen9.load(base64.b64decode(reply["data"])))
+    pikachu, fields = made("1501-25-0-2", "VL")
+    assert pikachu["your_ot"] and pikachu["legal"] and "file" not in pikachu
+    assert (fields["ot_name"], fields["trainer_id"], fields["secret_id"], fields["language"], fields["ot_gender"],
+            fields["version"]) == ("Nemona", 4660, 66, 5, 1, gen9.VERSION_VIOLET)
+    assert made("1501-25-0-2", "SL")[1]["version"] == gen9.VERSION_SCARLET
+    assert made("9021-906-0-11", "VL")[1]["version"] == gen9.VERSION_SCARLET      # HOME's Sprigatito
+    assert not service.gift_event("sv", "0503-964-0-10", save, keep=False)["your_ot"]     # Gavin's Palafin
+    # Violet's Koraidon, which no Scarlet save received, has the card's own trainer: a traded Pokemon either holds.
+    for version in ("SL", "VL"):
+        koraidon = service.gift_event("sv", "1540-1007-0-1", save, version=version, keep=False)
+        assert (koraidon["refused"], koraidon["legal"], koraidon["ot"]) == ("", True, "Paldea")
+
+
+def test_a_card_no_save_in_the_trainers_language_received_is_refused(service):
+    """A card that gives the receiver's own trainer reached saves in the languages it was given in, which PKHeX's
+    check knows: Let's Go's Chinese Meltan and Melmetal reached Simplified Chinese saves alone. Made for a trainer
+    in another language the copy is refused, never kept, and listed as illegal with the reason; for a Simplified
+    Chinese trainer it is made. Let's Go's Mew takes any language."""
+    chinese = dict(TRAINER, language=9)
+    for key in sorted(CHINESE_ONLY):
+        refused = service.gift_event("lgpe", key, TRAINER)
+        assert refused["your_ot"] and "file" not in refused
+        assert refused["refused"] == f"card {key[:4]} gave it in Simplified Chinese alone, never to a save in English"
+        made = service.gift_event("lgpe", key, chinese, keep=False)
+        assert (made["refused"], made["legal"], made["ot"]) == ("", True, TRAINER["ot"])
+    listed = {e["key"]: e for e in service.gift_events("lgpe", TRAINER)}
+    assert (listed["1502-809-0"]["legal"], listed["1502-809-0"]["language"]) == (False, 9)
+    assert listed["1502-809-0"]["refused"] == refused["refused"]
+    assert (listed["2001-151-0"]["legal"], listed["2001-151-0"]["refused"]) == (True, "")
+    assert service.gift_event("lgpe", "2001-151-0", dict(TRAINER, language=1), keep=False)["refused"] == ""
+
+
+# A card that names its receiver, one that fixes its trainer, a save's version and the copy's, per game. HOME's
+# Turtwig names Brilliant Diamond whichever the save is, as HOME's Sprigatito names Scarlet.
+RECEIVER_GIFTS = {"lgpe": ("2001-151-0", "0002-150-0", "GE", 43), "bdsp": ("9015-387-0", "9026-490-0", "SP", 48),
+                  "pla": ("9018-722-0", "9027-905-0", "PLA", 47), "sv": ("1501-25-0-2", "0503-964-0-10", "VL", 51),
+                  "za": ("1601-280-0", "0101-531-0", "ZA", 52)}
+
+
+@pytest.mark.parametrize("game", RECEIVER_GIFTS)
+def test_a_host_makes_again_only_the_gifts_that_name_their_receiver(service, game):
+    """--for-receiver (pokeldn.receiver_gift): the copy of a card that names its receiver is made again for the
+    console's save on its version, through the checks the host's own offers take (its --fresh-pid, PKHeX's
+    offer check, its loader), and PKHeX still finds it legal as the host sends it; one whose card fixes its
+    trainer goes as made. The console's offer, in each host's own format, reads back as that save's."""
+    import lgpe_host
+    import za_host
+    from pokeldn import receiver_gift
+    from pokeldn.bdsp import pokemon as bdsp_pokemon
+    from pokeldn.pla import pokemon as pla_pokemon
+    from pokeldn.sv import trade
+    load = {"lgpe": lgpe_host.boxed, "bdsp": bdsp_pokemon.build_from,       # the trade box ends on PKHeX's check
+            "pla": lambda raw: pokemon.validate("pla", pla_pokemon.encrypt(pla_pokemon.load(raw))),
+            "sv": trade.load_offer, "za": za_host.gift_offer}[game]
+    yours, fixed, version, number = RECEIVER_GIFTS[game]
+    assert receiver_gift.rounds(game, [yours, fixed], [b"yours", b"fixed"], log=lambda line: None) == [
+        (yours, b"yours"), ("", b"fixed")]
+    save = {"ot": "Nemona", "tid": 4660, "sid": 66, "language": 5, "gender": 1}
+    body, what = receiver_gift.maker(game, load, fresh=True)(yours, save, version)
+    assert service.check_bytes(game, body)["legal"]
+    read = receiver_gift.owner_reader(game)
+    f = read(body)
+    assert (f["ot"], f["tid"], f["sid"], f["gender"], f["version"], f["egg"]) == ("Nemona", 4660, 66, 1, number, False)
+    assert {"handler", "ht_name", "ht_gender", "ht_language"} <= set(f)
+    assert " · level " in what
+    try:                                    # an empty slot names no one, if it reads at all
+        assert receiver_gift.unknown(game, read(bytes(len(body))))
+    except ValueError:
+        pass
+
+
+@pytest.mark.parametrize("game", RECEIVER_GIFTS)
+def test_a_gift_made_for_its_own_trainer_needs_no_handler(service, game):
+    """A save that receives a Pokemon whose OT is its own clears the handler (docs/sv.md, What a trade rewrites):
+    a card made for the receiving player must be legal without one. HOME's starters on Scarlet/Violet and
+    Legends Z-A are legal only with a handler, so they go with the trainer from Settings."""
+    save = {"ot": "Nemona", "tid": 4660, "sid": 66, "language": 2, "gender": 1}
+    handled = []
+    for event in service.gift_events(game, save):
+        info = service.gift_event(game, event["key"], save, keep=False)
+        if info["your_ot"] and not info["refused"]:
+            assert service.owner(game, base64.b64decode(info["data"]))["handler"] == 0, event["key"]
+        if info["handled"]:
+            assert not info["your_ot"]
+            handled.append(event["key"].split("-")[0])
+    assert sorted(handled) == {"sv": ["9021", "9022", "9023"], "za": ["9031", "9032", "9033"]}.get(game, [])
 
 
 def test_a_fixed_event_trainer_cannot_be_overwritten(service):
@@ -382,6 +582,18 @@ def test_a_value_the_builder_does_not_set_is_reported(service, game, text, note)
     assert "effort" not in found["options"] or game != "lgpe"
 
 
+@pytest.mark.parametrize("game, text, friendship", [
+    ("swsh", "Riolu\nFriendship: 255\n- Quick Attack", 255),
+    ("swsh", "Riolu\nHappiness: 0", 0),
+    ("swsh", CHARIZARD_FR + "Bonheur : 200", 200),
+    ("bdsp", "Manaphy\nLevel: 1", None),     # an event whose friendship is fixed: Showdown's 255 would refuse it
+])
+def test_a_set_asks_for_friendship_only_by_naming_it(service, game, text, friendship):
+    found, = service.paste(game, text, TRAINER)
+    assert found["errors"] == [] and found["options"].get("friendship") == friendship
+    assert service.make(game, found["species_id"], TRAINER, found["level"], options=found["options"])["legal"]
+
+
 def test_a_team_paste_returns_every_set_in_order(service):
     """Showdown's team export opens with a header line, and a paste may mix languages."""
     sets = service.paste("sv", "=== [gen9] Team ===\n\n" + GARCHOMP + "\n\n" + ROTOM + "\n" + GARCHOMP_JA, TRAINER)
@@ -408,3 +620,29 @@ def test_the_sv_bag_holds_every_reward_a_raid_seed_gives(service):
     assert awarded <= bag
     assert 16 not in bag and 1230 not in bag          # Cherish Ball and TM00, unreleased
     assert 1829 not in bag and 2405 not in bag        # key items of PKHeX's Event pouch
+
+
+def test_a_hanging_parser_is_killed_and_the_next_check_recovers(tmp_path, monkeypatch):
+    helper = tmp_path / 'parser.py'
+    marker = tmp_path / 'first-request'
+    helper.write_text('''import json, sys, threading
+from pathlib import Path
+marker = Path(sys.argv[1])
+for line in sys.stdin:
+    request = json.loads(line)
+    if not marker.exists():
+        marker.write_text('started')
+        threading.Event().wait()
+    print(json.dumps({'ok': True, 'legal': True, 'parsed': True, 'data': request['data']}), flush=True)
+''', encoding='utf-8')
+    monkeypatch.setattr(pokemon, '_command', lambda: [sys.executable, str(helper), str(marker)])
+    monkeypatch.setattr(pokemon, 'CHECK_TIMEOUT', 0.5)
+    from pokeldn.pla.trade_box import REFERENCE_RECORD
+    instance = pokemon.Service()
+    try:
+        with pytest.raises(pokemon.BuilderError, match='took too long'):
+            instance.check_bytes('pla', REFERENCE_RECORD)
+        assert marker.exists() and instance.proc is None
+        assert instance.prepare('pla', REFERENCE_RECORD) == REFERENCE_RECORD
+    finally:
+        instance.close()

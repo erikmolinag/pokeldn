@@ -34,21 +34,15 @@ class ScreenView:
             self.inner.leave()
 
 
-class OptionsView:
-    """Settings, the board and the guide on one screen, switched by tabs."""
+class TabsView:
+    """A few pages on one screen, switched by tabs; the first tab is the screen's own page."""
 
-    TABS = (("settings", "Settings", "gear"), ("board", "Board", "cpu"), ("controller", "Control", "joystick"),
-            ("docs", "Guide", "book-open"))
+    TABS: tuple = ()   # (key, label, icon)
 
-    def __init__(self, app):
-        from gui.views.boards import BoardView
-        from gui.views.controller import ControllerView
-        from gui.views.docs import DocsView
-        from gui.views.settings import SettingsView
+    def __init__(self, app, views: dict):
         self.app = app
-        self.views = {"settings": SettingsView(app), "board": BoardView(app), "controller": ControllerView(app),
-                      "docs": DocsView(app)}
-        self.tab = "settings"
+        self.views = views
+        self.tab = self.TABS[0][0]
         self.tabs = ft.Container()
         self.body = ft.Container(expand=True)
         self.control = ft.Column([
@@ -69,7 +63,7 @@ class OptionsView:
         old = self.views.get(self.tab)
         if tab != self.tab and hasattr(old, "leave"):
             old.leave()
-        self.tab = tab if tab in self.views else "settings"
+        self.tab = tab if tab in self.views else self.TABS[0][0]
         self.render()
         view = self.views[self.tab]
         if hasattr(view, "enter"):
@@ -82,3 +76,31 @@ class OptionsView:
         view = self.views.get(self.tab)
         if hasattr(view, "leave"):
             view.leave()
+
+
+class OptionsView(TabsView):
+    """Settings, the board, the controller, plugins and the guide on one screen."""
+
+    TABS = (("settings", "Settings", "gear"), ("board", "Board", "cpu"), ("controller", "Control", "joystick"),
+            ("plugins", "Plugins", "plug"), ("docs", "Guide", "book-open"))
+
+    def __init__(self, app):
+        from gui.views.boards import BoardView
+        from gui.views.controller import ControllerView
+        from gui.views.docs import DocsView
+        from gui.views.plugins import PluginsView
+        from gui.views.settings import SettingsView
+        super().__init__(app, {"settings": SettingsView(app), "board": BoardView(app),
+                               "controller": ControllerView(app), "plugins": PluginsView(app),
+                               "docs": DocsView(app)})
+
+
+class BankScreen(TabsView):
+    """The bank, and the GTS that lists its Pokemon online."""
+
+    TABS = (("bank", "Bank", "package"), ("gts", "GTS", "globe"))
+
+    def __init__(self, app):
+        from gui.views.bank import BankView
+        from gui.views.gts import GtsView
+        super().__init__(app, {"bank": BankView(app), "gts": GtsView(app)})

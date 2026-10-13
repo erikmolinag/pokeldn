@@ -53,6 +53,16 @@ MATERIAL = {
     "pokeball": ft.Icons.CATCHING_POKEMON,
     "language": ft.Icons.TRANSLATE_ROUNDED,
     "fork": ft.Icons.CALL_SPLIT_ROUNDED,
+    # upstream 0.19-0.22: bank import, plugins, GTS, the board's states and the raid size marks
+    "archive": ft.Icons.ARCHIVE_ROUNDED,
+    "blocks": ft.Icons.WIDGETS_ROUNDED,
+    "controller": ft.Icons.SPORTS_ESPORTS_ROUNDED,
+    "denied": ft.Icons.BLOCK_ROUNDED,
+    "plug": ft.Icons.EXTENSION_ROUNDED,
+    "shuffle": ft.Icons.SHUFFLE_ROUNDED,
+    "wrong-port": ft.Icons.USB_OFF_ROUNDED,
+    "jumbo-mark": ft.Icons.ZOOM_OUT_MAP_ROUNDED,
+    "mini-mark": ft.Icons.ZOOM_IN_MAP_ROUNDED,
     # upstream's newer pages (bank, online trade, controller, raids)
     "arrow-down": ft.Icons.ARROW_DOWNWARD_ROUNDED,
     "arrow-left": ft.Icons.ARROW_BACK_ROUNDED,

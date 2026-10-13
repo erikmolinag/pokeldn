@@ -382,6 +382,28 @@ ES = {
     "Options": "Opciones",
     "pokeldn · a fork by {name}": "pokeldn · fork de {name}",
 
+    # upstream 0.19-0.22 in the HOME screens: the GTS beside the bank, plugins among the options
+    "Keep Pokemon on this computer, send them back to a game or trade them on the GTS.":
+        "Guarda Pokémon en esta computadora, mándalos de vuelta a un juego o cámbialos en el GTS.",
+    "Board, language, keys, plugins and the guide.": "Placa, idioma, claves, plugins y la guía.",
+    "Plugins": "Plugins",
+    "GTS": "GTS",
+    "Radio: {name}": "Radio: {name}",
+    "Radio plugin not loaded": "El plugin de radio no está cargado",
+    "Turn its plugin on, or pick the board.": "Activa su plugin o elige la placa.",
+    "Real event cards from the projectpokemon EventsGallery archive, and under Pokemon HOME the community's cards "
+    "of the gifts Pokemon HOME gave. Each one passed the game's own card check.":
+        "Tarjetas de eventos reales del archivo EventsGallery de projectpokemon y, en Pokémon HOME, las tarjetas "
+        "que la comunidad hizo de los regalos que dio Pokémon HOME. Cada una pasó la revisión de tarjetas del "
+        "propio juego.",
+    "It can Gigantamax: a species with a Gigantamax form, or one that evolves into one.":
+        "Puede hacer Gigamax: una especie con forma Gigamax o que evoluciona en una.",
+    "Friendship (0-255)": "Amistad (0-255)",
+    " Drop a Pokemon file or a game save here to import what it holds.":
+        " Suelta aquí un archivo de Pokémon o una partida para importar lo que tiene.",
+    " (+{n} more)": " (+{n} más)",
+    "Import a Pokemon file or a game save": "Importar un archivo de Pokémon o una partida",
+
     # the owner of built Pokemon
     "Built for your trainer: {name} · ID {tid}": "Se genera para tu entrenador: {name} · ID {tid}",
     "No trainer yet: built Pokemon will belong to pokeldn, not to you.":
@@ -390,3 +412,9 @@ ES = {
 
 from gui.i18n_extra import ES_EXTRA  # noqa: E402
 ES.update(ES_EXTRA)
+from gui.i18n_gts import ES_GTS  # noqa: E402
+from gui.i18n_plugins import ES_PLUGINS  # noqa: E402
+from gui.i18n_misc import ES_MISC  # noqa: E402
+ES.update(ES_GTS)
+ES.update(ES_PLUGINS)
+ES.update(ES_MISC)

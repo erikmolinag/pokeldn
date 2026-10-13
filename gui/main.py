@@ -33,12 +33,14 @@ from gui import drop, flet_client, i18n, screen, theme as t  # noqa: E402
 from gui.app import App  # noqa: E402
 from gui.i18n import tr  # noqa: E402
 from gui.views.widgets import page_key  # noqa: E402
-from pokeldn import __version__  # noqa: E402
+from pokeldn import __version__, popup  # noqa: E402
 from pokeldn.app import update  # noqa: E402
 from pokeldn.app.paths import ROOT  # noqa: E402
 
 # Upstream page names, as other views ask for them, mapped onto poke-app's screens.
-ALIASES = {"home": "menu", "board": "options", "settings": "options", "docs": "options", "controller": "options"}
+ALIASES = {"home": "menu", "board": "options", "settings": "options", "docs": "options", "controller": "options",
+           "plugins": "options", "gts": "bank"}
+TABS = ("board", "settings", "docs", "controller", "plugins", "gts")   # pages that are a tab of their screen
 TOOL_SCREENS = {"frlg-trainer": "trainer", "frlg-trade-host": "trade", "frlg-trade-join": "trade",
                 "frlg-trade-online": "trade",
                 "frlg-gift": "gift"}
@@ -49,8 +51,8 @@ SCREENS = {
     "team": ("pokeball", "Pokemon", "Build the Pokemon you will trade: they belong to your trainer."),
     "trainer": ("trainer", "My trainer", "Read your name, Trainer ID and Secret ID from the console."),
     "save": ("save", "My save", "Copy your whole save to this computer, or put one back."),
-    "bank": ("package", "Bank", "Keep Pokemon on this computer and send them back to a game."),
-    "options": ("gear", "Options", "Board, language, keys and the guide."),
+    "bank": ("package", "Bank", "Keep Pokemon on this computer, send them back to a game or trade them on the GTS."),
+    "options": ("gear", "Options", "Board, language, keys, plugins and the guide."),
 }
 FORK = "https://github.com/erikmolinag/pokeldn"
 BAR = ft.Colors.with_opacity(0.80, "#FFFFFF")
@@ -79,12 +81,14 @@ def main(page: ft.Page) -> None:
     current = {"key": "menu"}
 
     def build(key: str):
-        from gui.views.screen import OptionsView, ScreenView
+        from gui.views.screen import BankScreen, OptionsView, ScreenView
         if key == "menu":
             from gui.views.menu import MenuView
             return MenuView(app)
         if key == "options":
             return ScreenView(app, *SCREENS[key], OptionsView(app))
+        if key == "bank":
+            return ScreenView(app, *SCREENS[key], BankScreen(app))
         from gui.views.games import GamesView
         if key == "trade":
             inner = GamesView(app, single="frlg-trade-host",
@@ -96,9 +100,6 @@ def main(page: ft.Page) -> None:
             return ScreenView(app, *SCREENS[key], inner, side=team_side(app))
         if key == "trainer":
             return ScreenView(app, *SCREENS[key], GamesView(app, single="frlg-trainer"))
-        if key == "bank":
-            from gui.views.bank import BankView
-            return ScreenView(app, *SCREENS[key], BankView(app))
         if key == "save":
             return ScreenView(app, *SCREENS[key], GamesView(app, single="frlg-gift"), {"gift_mode": "save"})
         return ScreenView(app, *SCREENS["gift"], GamesView(app, single="frlg-gift"), {"gift_mode": "gift"})
@@ -170,7 +171,7 @@ def main(page: ft.Page) -> None:
             return
         if key == "games":
             key = TOOL_SCREENS.get(kwargs.get("tool", ""), "trade")
-        if key in ("board", "settings", "docs", "controller"):
+        if key in TABS:
             kwargs.setdefault("tab", key)
         key = ALIASES.get(key, key)
         previous = views.get(current["key"])
@@ -247,14 +248,22 @@ def main(page: ft.Page) -> None:
         welcome(app)
     elif outcome:
         updated_notice(app, outcome)
+    elif app.plugin_stopped:
+        plugin_stopped_notice(app)
 
     def updated() -> None:
         render_chrome()
         page.update()
     app.update_listeners.append(updated)
+    app.plugin_update_listeners.append(updated)
     if getattr(sys, "frozen", False):
         threading.Thread(target=prune_viewers, daemon=True).start()
-    # poke-app does not ask Decryptu/pokeldn for updates: a release there is the upstream app, not this one.
+    # poke-app does not ask Decryptu/pokeldn for app updates: its builds come from the fork's Actions.
+    # Installed plugins still ask their own addresses for theirs.
+    if app.settings.check_updates:
+        app.check_plugin_updates()
+    from gui.views.gts import resume
+    resume(app)      # a listing or an offer left open is answered while the app runs
 
 
 def prune_viewers() -> None:
@@ -267,7 +276,9 @@ def prune_viewers() -> None:
 def offer_update(app: App) -> None:
     """A newer release on GitHub: installed in place when this copy can replace itself, else its file."""
     release = app.update
-    reason = update.blocker(update.install_root()) if release.installable else "manual"
+    root = update.install_root()
+    reason = update.blocker(root) if release.installable else "manual"
+    admin = not reason and update.needs_admin(root)
 
     def close(e):
         app.page.pop_dialog()
@@ -284,7 +295,7 @@ def offer_update(app: App) -> None:
             note.update()
             return
         app.page.pop_dialog()
-        install_update(app, release)
+        install_update(app, release, admin)
 
     note = t.text(f"You have {__version__}. "
                   + ("pokeldn downloads it, checks it and restarts in the new version. " if not reason else
@@ -292,6 +303,7 @@ def offer_update(app: App) -> None:
                      "Download the new version for your computer from the release page, then replace this app "
                      "with it. ")
                   + (f"{reason} " if reason and reason != "manual" else "")
+                  + (f"Windows asks for permission to change {root.parent}. " if admin else "")
                   + "Your settings, keys and received Pokemon stay where they are.", 13, t.MUTED)
     main = (t.button("Update now", install, "download") if not reason else
             t.button("Download", open_(release.download), "download"))
@@ -305,7 +317,7 @@ def offer_update(app: App) -> None:
     app.page.update()   # also shown from a background check, where Flet does not flush on its own
 
 
-def install_update(app: App, release: update.Release) -> None:
+def install_update(app: App, release: update.Release, admin: bool = False) -> None:
     """Downloads and checks the release, then quits so the new app can take this one's place."""
     stop = threading.Event()
     status = t.text("Downloading...", 13, t.MUTED)
@@ -361,7 +373,7 @@ def install_update(app: App, release: update.Release) -> None:
             new = update.prepare(release, progress, stop.is_set)
             if stop.is_set():
                 raise update.Cancelled
-            update.start_swap(new, root, release.version)
+            update.start_swap(new, root, release.version, admin=admin)
             # This window stays until the helper's own is up, so one is always on screen.
             update.wait_for(update.READY.exists, 15.0)
         except update.Cancelled:
@@ -380,15 +392,23 @@ def updated_notice(app: App, outcome: dict) -> None:
     """What the last update did, shown once by the app it opened."""
     error, version = outcome.get("error") or "", str(outcome.get("version") or "")
     if not error and version == __version__:
-        app.page.show_dialog(ft.SnackBar(ft.Text(f"pokeldn updated to {__version__}"), duration=4000))
+        app.page.show_dialog(ft.SnackBar(ft.Text(tr("pokeldn updated to {version}", version=__version__)),
+                                         duration=4000))
         return
-    app.page.show_dialog(t.dialog(
-        semantics_label="Update failed",
-        title=t.text("The update did not install", 17, weight=ft.FontWeight.W_600),
-        content=ft.Container(t.text(f"pokeldn {version} could not replace this app: "
-                                    f"{error or 'it opened the old version'}. This app is unchanged.",
-                                    13, t.MUTED), width=460),
-        actions=[t.button("Close", lambda e: app.page.pop_dialog())]))
+    popup.acknowledge(tr("The update did not install"),
+                      tr("pokeldn {version} could not replace this app: {error}. This app is unchanged.",
+                         version=version, error=error or tr("it opened the old version")),
+                      id="update-failed", label=tr("Close"), tone="error")
+
+
+def plugin_stopped_notice(app: App) -> None:
+    """A plugin froze or closed the app last time while it started; App turned it off."""
+    popup.confirm(tr("A plugin was turned off"),
+                  tr("pokeldn closed or stopped answering last time while starting the plugin {name}. "
+                     "It is off now; turn it on again on the Plugins page once its author has a fix.",
+                     name=app.plugin_stopped),
+                  tr("Open Plugins"), tr("Not now"), id="plugin-stopped", tone="warning",
+                  on_agree=lambda: app.ui(lambda: app.navigate("plugins")))
 
 
 def welcome(app: App) -> None:
