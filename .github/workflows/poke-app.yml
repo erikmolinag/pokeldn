@@ -3,7 +3,8 @@ name: poke-app (Windows)
 # The Pokemon-styled FireRed/LeafGreen edition of the desktop app, built for Windows from the poke-app
 # branch. It runs by hand (Actions, poke-app (Windows), Run workflow) and on pushes to poke-app that touch
 # the app. The radio firmware is unchanged from upstream, so the images come from Decryptu/pokeldn's
-# release (radio and controller images) instead of six ESP-IDF builds. The zip is a workflow artifact; nothing is published.
+# release (radio and controller images) instead of six ESP-IDF builds, and so does the Flet client (see its
+# step). The zip is a workflow artifact; nothing is published.
 on:
   workflow_dispatch:
   push:
@@ -21,7 +22,7 @@ permissions:
   contents: read
 
 env:
-  FIRMWARE_RELEASE: v0.22.2
+  UPSTREAM_RELEASE: v0.22.2   # the upstream release merged in: its firmware images and its Flet client
 
 jobs:
   windows:
@@ -44,18 +45,25 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p gui/firmware
-          gh release download "$FIRMWARE_RELEASE" -R Decryptu/pokeldn -p "pokeldn-*.bin" -D gui/firmware
+          gh release download "$UPSTREAM_RELEASE" -R Decryptu/pokeldn -p "pokeldn-*.bin" -D gui/firmware
           ls -la gui/firmware
       - name: Install
         run: python -m pip install -r gui/requirements.txt
-      - name: Restore the Flet client
-        id: client
-        uses: actions/cache@v4
-        with:
-          path: |
-            gui/client/*
-            !gui/client/flet
-          key: flet-client-${{ runner.os }}-${{ hashFiles('requirements.txt', 'gui/requirements.txt', 'gui/flet_client.py', 'scripts/build_client.py', 'gui/flet_drop/**') }}
+      - name: Flet client from the upstream release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The client is upstream's source (gui/flet_drop, scripts/build_client.py), so the release's build is
+          # taken as it is. Smart App Control trusts the files of that widely downloaded build, and blocked
+          # the unsigned plugin DLLs a fresh build makes (pasteboard_plugin.dll, error 0xc0e90002).
+          gh release download "$UPSTREAM_RELEASE" -R Decryptu/pokeldn -p "pokeldn-windows-x64.zip" -D upstream
+          python -m zipfile -e upstream/pokeldn-windows-x64.zip upstream/app
+          mkdir -p gui/client/windows
+          python -m zipfile -e upstream/app/pokeldn/_internal/flet_desktop/app/flet-windows.zip gui/client/windows
+          echo "flet $(python -c "from importlib.metadata import version; print(version('flet'))")" \
+            > gui/client/windows/pokeldn-drop
+          ls -la gui/client/windows/flet
       - name: Restore the ARM-only Unicorn
         id: unicorn
         uses: actions/cache@v4
@@ -64,22 +72,6 @@ jobs:
             gui/unicorn/lib
             gui/unicorn/pokeldn-unicorn
           key: unicorn-${{ runner.os }}-${{ hashFiles('requirements.txt', 'scripts/build_unicorn.py') }}
-      - name: Flutter version
-        if: steps.client.outputs.cache-hit != 'true'
-        id: flet
-        shell: bash
-        run: |
-          python -m flet_cli.cli --version --json > flet.json
-          echo "flutter=$(python -c "import json; print(json.load(open('flet.json'))['flutter'])")" >> "$GITHUB_OUTPUT"
-      - uses: subosito/flutter-action@v2
-        if: steps.client.outputs.cache-hit != 'true'
-        with:
-          flutter-version: ${{ steps.flet.outputs.flutter }}
-          channel: stable
-          cache: true
-      - name: Build the Flet client
-        if: steps.client.outputs.cache-hit != 'true'
-        run: python scripts/build_client.py
       - name: Build the ARM-only Unicorn
         if: steps.unicorn.outputs.cache-hit != 'true'
         run: python scripts/build_unicorn.py
