@@ -300,6 +300,8 @@ static partial class Program
                 : detail.Genderless ? Gender.Random : wish.Gender ?? Gender.Random;
             if (gender != Gender.Random)
                 blank.Gender = (byte)gender;
+            if ((bool?)(request["options"] as JsonObject)?["best_ivs"] == true)
+                return MakeBestIvs(game, species, level, shiny, nickname, wish, versions, trainer, blank, detail, gender);
             string? firstProblem = null, firstUnmet = null;
             var lowest = int.MaxValue;
             var shinyLocked = false;
@@ -396,6 +398,133 @@ static partial class Program
                         : wish.Moves.Length > 1
                             ? $"No legal {name} in this game can know these moves together."
                             : $"PKHeX has no legal {name} for this game.");
+        }
+
+        // poke-app, Best IVs: the Gen 3 Pokemon with the highest IV total that this trainer could have caught. A wild
+        // or gift Pokemon of Gen 3 takes its PID and IVs from four LCG outputs in a row (Method 1, PKHeX MethodFinder),
+        // so all 2^32 seeds are tried for the shininess (this trainer's TID and SID), nature, gender and ability asked
+        // for, and the best totals are built from each encounter of the species until PKHeX finds one legal.
+        JsonObject MakeBestIvs(Game game, ushort species, int level, bool shiny, string nickname, Wish wish,
+                               GameVersion[] versions, ITrainerInfo trainer, PKM blank, IPersonalInfo detail, Gender gender)
+        {
+            var name = strings.specieslist[species];
+            if (game.Context != EntityContext.Gen3)
+                throw new ArgumentException("Best IVs searches the Gen 3 games only.");
+            // The frame decides the IVs: any the request typed are left to it.
+            wish = wish with { IVs = [-1, -1, -1, -1, -1, -1] };
+            // Eggs, in-game trades and events carry their own PID and IVs; only a wild or gift encounter rolls them.
+            var encounters = EncounterMovesetGenerator.GenerateEncounters(blank, trainer, wish.Moves, versions)
+                .Where(e => e is EncounterSlot3 or EncounterStatic3 && e is IEncounterConvertible)
+                .Where(e => !shiny || e.Shiny != Shiny.Never)
+                .Where(e => level == 0 || e.LevelMin <= level)
+                .ToList();
+            if (encounters.Count == 0)
+                throw new InvalidOperationException($"No wild or gift {name} in this game rolls its own IVs at this level.");
+            var abilityBit = -1;
+            if (wish.Ability is { } ability && detail.AbilityCount > 1 && detail.GetAbilityAtIndex(0) != detail.GetAbilityAtIndex(1))
+                abilityBit = detail.GetAbilityAtIndex(0) == ability ? 0 : detail.GetAbilityAtIndex(1) == ability ? 1
+                    : throw new ArgumentException($"{name} cannot have the ability {strings.abilitylist[ability]}.");
+            var ratio = detail.Genderless || detail.OnlyMale || detail.OnlyFemale ? -1 : detail.Gender;
+            var frames = Gen3Frames(shiny ? trainer.TID16 ^ trainer.SID16 : -1, wish.Nature is { } n ? (int)n : -1,
+                                    ratio, ratio < 0 || gender == Gender.Random ? -1 : (int)gender, abilityBit);
+            // Whether an encounter and met level can be legal hardly depends on the frame: one that failed while its
+            // levels were climbed is not tried again.
+            var dead = new HashSet<(int, int)>();
+            string? firstProblem = null;
+            foreach (var (seed, _) in frames.Take(200))
+            {
+                for (var e = 0; e < encounters.Count; e++)
+                {
+                    var encounter = encounters[e];
+                    var top = level > 0 ? Math.Min(encounter.LevelMax, level) : encounter.LevelMax;
+                    for (var met = (int)encounter.LevelMin; met <= top; met++)
+                    {
+                        if (dead.Contains((e, met)))
+                            continue;
+                        int[] lows = level > 0 ? [level] : [.. Enumerable.Range(met, 101 - met)];
+                        foreach (var lv in lows)
+                        {
+                            var pk = ((IEncounterConvertible)encounter).ConvertToPKM(trainer);
+                            SetFrame(pk, seed);
+                            pk.MetLevel = (byte)met;
+                            var evolved = pk.Species != species;
+                            if (evolved)
+                            {
+                                pk.Species = species;
+                                pk.ClearNickname();
+                            }
+                            pk.CurrentLevel = (byte)lv;
+                            if (nickname.Length > 0)
+                                pk.SetNickname(nickname);
+                            wish.Apply(pk);
+                            var la = Mend(pk, evolved, encounter, trainer, wish);
+                            if (Accepted(pk, la) && wish.Unmet(pk, strings) is null)
+                                return Describe(game, pk, la);
+                            firstProblem ??= la.Report(displayLanguage);
+                            // Without a level asked for, only an evolved Pokemon climbs, to its first legal level.
+                            if (!evolved)
+                                break;
+                        }
+                        if (level == 0)
+                            dead.Add((e, met));
+                    }
+                }
+            }
+            throw new InvalidOperationException(firstProblem is not null
+                ? $"No legal {name} with these choices. {firstProblem}"
+                : $"No {name} with these choices in the frames searched.");
+        }
+
+        static uint NextSeed(uint s) => unchecked(s * 0x41C64E6Du + 0x6073u);
+
+        // Method 1's frame from `seed`: the PID's low and high halves, then the IVs HP/Atk/Def and Spe/SpA/SpD. Gen 3
+        // reads nature and gender from the PID, and a rolled Pokemon's ability slot from its lowest bit.
+        static void SetFrame(PKM pk, uint seed)
+        {
+            uint s1 = NextSeed(seed), s2 = NextSeed(s1), s3 = NextSeed(s2), s4 = NextSeed(s3);
+            pk.PID = (s2 >> 16) << 16 | (s1 >> 16);
+            uint a = s3 >> 16, b = s4 >> 16;
+            pk.IV_HP = (int)(a & 31); pk.IV_ATK = (int)(a >> 5 & 31); pk.IV_DEF = (int)(a >> 10 & 31);
+            pk.IV_SPE = (int)(b & 31); pk.IV_SPA = (int)(b >> 5 & 31); pk.IV_SPD = (int)(b >> 10 & 31);
+            pk.RefreshAbility((int)(pk.PID & 1));
+        }
+
+        // Every Method 1 seed, in parallel: the ones whose PID gives the shininess for `tsv` (TID xor SID, -1 for any),
+        // `nature`, `gender` (against the species' gender `ratio`) and ability slot asked for, best IV total first.
+        // The total they must reach starts high and drops until enough seeds qualify; each pass takes a few seconds.
+        static List<(uint Seed, int Sum)> Gen3Frames(int tsv, int nature, int ratio, int gender, int abilityBit)
+        {
+            for (var floor = tsv >= 0 ? 140 : 176; ; floor -= 16)
+            {
+                var found = new List<(uint, int)>();
+                var gate = new object();
+                Parallel.For(0, 1 << 16, hi =>
+                {
+                    List<(uint, int)>? local = null;
+                    for (uint lo = 0; lo < 0x10000; lo++)
+                    {
+                        uint s0 = (uint)hi << 16 | lo, s1 = NextSeed(s0), s2 = NextSeed(s1);
+                        uint low = s1 >> 16, high = s2 >> 16, pid = high << 16 | low;
+                        if (tsv >= 0 && ((uint)tsv ^ low ^ high) >= 8)
+                            continue;
+                        if (nature >= 0 && pid % 25 != nature)
+                            continue;
+                        if (gender >= 0 && ((pid & 0xFF) < ratio ? 1 : 0) != gender)
+                            continue;
+                        if (abilityBit >= 0 && (pid & 1) != abilityBit)
+                            continue;
+                        uint s3 = NextSeed(s2), a = s3 >> 16, b = NextSeed(s3) >> 16;
+                        var sum = (int)((a & 31) + (a >> 5 & 31) + (a >> 10 & 31) + (b & 31) + (b >> 5 & 31) + (b >> 10 & 31));
+                        if (sum >= floor)
+                            (local ??= []).Add((s0, sum));
+                    }
+                    if (local is not null)
+                        lock (gate)
+                            found.AddRange(local);
+                });
+                if (found.Count >= 50 || floor <= 0)
+                    return [.. found.OrderByDescending(f => f.Item2).ThenBy(f => f.Item1)];
+            }
         }
 
         // Repairs a built record one step at a time, each step on top of the last, and stops at the first that is legal.
@@ -1556,6 +1685,7 @@ static partial class Program
                 ["moves"] = moves,
                 ["move_ids"] = new JsonArray(pk.Moves.Where(m => m != 0).Select(m => (JsonNode?)(int)m).ToArray()),
                 ["pid"] = pk.PID,
+                ["ivs"] = new JsonArray(pk.IV_HP, pk.IV_ATK, pk.IV_DEF, pk.IV_SPA, pk.IV_SPD, pk.IV_SPE),
                 ["encryption_constant"] = pk.EncryptionConstant,
                 ["tracker"] = (pk is IHomeTrack home ? home.Tracker : 0).ToString(),
                 ["encounter"] = la.EncounterOriginal.LongName,

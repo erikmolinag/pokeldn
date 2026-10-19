@@ -159,3 +159,57 @@ def test_the_app_links_only_to_the_fork():
     from gui.views import docs, settings as settings_view
     urls = [url for _, url in settings_view.LINKS] + [docs.REPO, docs.SITE]
     assert all(url.startswith("https://github.com/erikmolinag/pokeldn") for url in urls)
+
+
+def test_the_pokemon_screen_builds_for_the_players_own_trainer():
+    """gui/views/pokemon.py builds, reads options and pastes for Settings.owner (the trainer read from the console),
+    never for pokeldn's link identity: a merge that took upstream's file whole once lost this."""
+    tree = ast.parse(open(os.path.join(ROOT, "gui", "views", "pokemon.py"), encoding="utf-8").read())
+    calls = [node.func.attr for node in ast.walk(tree) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Attribute) and isinstance(node.func.value, ast.Attribute)
+             and node.func.value.attr == "settings" and node.func.attr in ("owner", "trainer")]
+    assert calls.count("owner") == 3 and "trainer" not in calls
+
+
+def test_best_ivs_are_the_best_legal_frame_for_the_trainer_asked():
+    """services/pkhex MakeBestIvs against the frames ~/pkgen found for Erik's TID/SID on 2026-09-30: a shiny
+    Nidoking's best is 182 (Hardy), and 177 when it must be Hasty. Another trainer gets other frames."""
+    from pokeldn import pokemon
+    try:
+        pokemon._command()
+    except Exception:
+        pytest.skip("PKHeX helper not built")
+    erks = {"ot": "erks", "tid": 59296, "sid": 18929, "language": 2, "gender": 0}
+    best = pokemon.SERVICE.make("frlg", 34, erks, 33, True, "", "FR", {"best_ivs": True})
+    hasty = pokemon.SERVICE.make("frlg", 34, erks, 33, True, "", "FR", {"best_ivs": True, "nature": 11})
+    other = pokemon.SERVICE.make("frlg", 34, {**erks, "ot": "ASH", "tid": 12345, "sid": 54321}, 33, True, "", "FR",
+                                 {"best_ivs": True})
+    assert best["legal"] and best["shiny"] and sum(best["ivs"]) == 182 and best["nature"] == "Hardy"
+    assert (best["ot"], best["trainer_id"], best["secret_id"]) == ("erks", 59296, 18929)
+    assert hasty["legal"] and hasty["shiny"] and hasty["nature"] == "Hasty" and hasty["ivs"] == [29, 27, 30, 31, 29, 31]
+    assert other["legal"] and other["shiny"] and other["ivs"] != best["ivs"] and other["trainer_id"] == 12345
+
+
+def test_the_best_ivs_switch_is_frlgs_and_replaces_the_typed_ivs():
+    pytest.importorskip("flet")
+    from types import SimpleNamespace
+    import flet as ft
+    from gui import theme as t
+    from gui.views.pokemon import OfferOptions
+    found = {"natures": [], "abilities": [], "gendered": True, "balls": [], "held": [], "forms": [], "move_names": [],
+             "effort": {"kind": "evs", "max": 252, "total": 510}}
+
+    def best_rows(game):
+        options = OfferOptions(SimpleNamespace(game=game, value={"options": {"ivs": {"hp": 30}}}))
+        options.control.update = lambda: None
+        return options, [c for c in options._form(found) if isinstance(c, ft.Container) and c.bgcolor == t.SELECTED]
+
+    assert best_rows("swsh")[1] == []
+    options, (row,) = best_rows("frlg")
+    switch = row.content.controls[1]
+    switch.value = True
+    switch.on_change(SimpleNamespace(control=switch))
+    assert options.chosen.get("best_ivs") is True and "ivs" not in options.chosen
+    switch.value = False
+    switch.on_change(SimpleNamespace(control=switch))
+    assert "best_ivs" not in options.chosen

@@ -125,7 +125,10 @@ class PokemonPicker:
             self.control.update()
             return
         self.build_button.disabled = True
-        self._message(tr('pokemon.finding_a_legal_encounter_952e05', 'Finding a legal encounter...'), t.MUTED, busy=True)
+        best = bool((self.value.get("options") or {}).get("best_ivs"))
+        self._message(tr('pokemon.poke_app_searching_best_ivs', 'Searching every seed for the best IVs your trainer can have...')
+                      if best else tr('pokemon.finding_a_legal_encounter_952e05', 'Finding a legal encounter...'),
+                      t.MUTED, busy=True)
         self.control.update()
         try:
             level = int(self.value.get("level") or 0)
@@ -135,13 +138,13 @@ class PokemonPicker:
         def work():
             try:
                 info = SERVICE.make(self.game, self.value["species"],
-                                            self.trainer or self.app.settings.trainer(self.game),
+                                            self.trainer or self.app.settings.owner(self.game),
                                             level, bool(self.value.get("shiny")),
                                             self.value.get("nickname", ""), VERSIONS.get(self.version, ""),
                                             self.value.get("options"))
                 self.value.update(file=info["file"], summary=builder.summary(info), legal=info["legal"],
                                   encounter=info.get("canonical", info)["encounter"], moves=info.get("canonical", info)["moves"],
-                                  home_tracker=info.get("home_tracker", ""))
+                                  home_tracker=info.get("home_tracker", ""), ivs=info.get("ivs"))
                 self.on_change(dict(self.value))
                 done = self._show_result
             except Exception as exc:
@@ -227,7 +230,7 @@ class PokemonPicker:
 
             def work():
                 try:
-                    sets, error = SERVICE.paste(self.game, text, self.app.settings.trainer(self.game),
+                    sets, error = SERVICE.paste(self.game, text, self.app.settings.owner(self.game),
                                                         VERSIONS.get(self.version, "")), ""
                 except Exception as exc:
                     sets, error = [], error_message(exc)
@@ -306,6 +309,9 @@ class PokemonPicker:
             tr("presentation.list_separator", ", ").join(translate(move) for move in self.value.get("moves", []))) if x)
         if detail:
             lines.append(t.text(detail, 12, t.MUTED))
+        if ivs := self.value.get("ivs"):   # HP, Atk, Def, SpA, SpD, Spe
+            lines.append(t.text(tr('pokemon.poke_app_ivs_line', 'IVs {value0} · total {value1}',
+                                   value0="/".join(str(v) for v in ivs), value1=sum(ivs)), 12, t.MUTED))
         if warning := builder.HOME_TRACKER_WARNINGS.get(self.value.get("home_tracker", "")):
             lines.append(t.badge(warning, t.AMBER, "warning-diamond"))
         if self.value.get("report"):
@@ -509,7 +515,7 @@ class OfferOptions:
 
         def work():
             try:
-                found = SERVICE.options(self.picker.game, species, app.settings.trainer(self.picker.game),
+                found = SERVICE.options(self.picker.game, species, app.settings.owner(self.picker.game),
                                                 VERSIONS.get(self.picker.version, ""), target[1])
                 found["move_names"], error = SERVICE.names(self.picker.game, "moves"), ""
             except Exception as exc:
@@ -551,16 +557,42 @@ class OfferOptions:
         effort = found["effort"]
         self.total = effort.get("total")
         limit = f"0-{effort['max']}" + (tr('pokemon.in_all_09ffde', ', {value0} in all', value0=effort['total']) if effort.get("total") else "")
+        ivs = self._stats("ivs", tr('pokemon.ivs_39e3d6', 'IVs'), 31, "0-31")
+        ivs.visible = not self.chosen.get("best_ivs")
         return [
             ft.Row(first, spacing=10),
             ft.Row(second, spacing=10),
             self._moves(found["move_names"]),
-            self._stats("ivs", tr('pokemon.ivs_39e3d6', 'IVs'), 31, "0-31"),
+            *([self._best_ivs(ivs)] if getattr(self.picker, "game", "") == "frlg" else []),
+            ivs,
             self._stats("effort", EFFORT[effort["kind"]], effort["max"], limit, effort.get("total")),
             ft.Row([t.text(tr('pokemon.empty_means_random_the_build_is_checked_by_pkhex_s_lega_14cf61', "Empty means random. The build is checked by PKHeX's legality analysis."), 12, t.FAINT,
                            expand=True),
                     t.link_button(tr('pokemon.clear_83b12c', 'Clear'), self._clear)]),
         ]
+
+    def _best_ivs(self, ivs: ft.Control) -> ft.Control:
+        """poke-app: FireRed and LeafGreen roll a Pokemon's PID and IVs from one seed, so the helper can try every seed
+        and keep the highest IV total that is legal for the player's trainer (services/pkhex MakeBestIvs). The
+        shininess, nature, gender and ability chosen here narrow the seeds; typed IVs give way to it."""
+        def flip(e):
+            if e.control.value:
+                self.chosen["best_ivs"] = True
+                self.chosen.pop("ivs", None)
+            else:
+                self.chosen.pop("best_ivs", None)
+            ivs.visible = not e.control.value
+            self._label()
+            self.control.update()
+        return ft.Container(ft.Row([
+            ft.Column([t.text(tr('pokemon.poke_app_best_ivs', 'Best IVs possible'), 13, weight=ft.FontWeight.W_700),
+                       t.text(tr('pokemon.poke_app_best_ivs_detail', 'Tries every seed the game can roll and keeps the '
+                                 'highest IV total that is legal for your Trainer ID and Secret ID, with the shininess, '
+                                 'nature, gender and ability chosen here.'), 12, t.MUTED)],
+                      spacing=2, tight=True, expand=True),
+            t.switch(bool(self.chosen.get("best_ivs")), flip),
+        ], spacing=12, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            padding=ft.Padding(12, 8, 8, 8), border_radius=14, bgcolor=t.SELECTED)
 
     def _choice(self, key: str, names: list[dict], search: bool = False, reload: bool = False) -> ft.Dropdown:
         current = self.chosen.get(key)
