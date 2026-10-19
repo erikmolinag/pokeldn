@@ -1,21 +1,22 @@
-# pokeldn 0.22.2
+# pokeldn 0.32.0
 
 This desktop app trades with seven Pokemon game families on a Switch or Switch 2
 through an ESP32 radio connected by USB. Nothing is installed on the console.
 
 ## What is new
 
-- Online trades verify incoming messages, keep the partner's identity fixed, and limit incoming
-  work. A rejected replacement Pokemon clears the previous offer and confirmation.
-- Plugin packages reject unsafe file paths and changes made after the install preview.
-- Sprite downloads reject malformed images and limit image decoding.
-- App updates and raid-event downloads check archive paths, links, file counts and unpacked size.
-  Downloads enforce size and time limits; app and firmware updates check their release source.
+- Sword/Shield Max Raid (Host): host a den raid your console joins, with a chosen, Gigantamax or
+  past Wild Area Event boss, and the rewards you pick among that den's own.
+- Sword/Shield Dynamax Adventure (Host): host a Max Lair whose legendary you choose; once the
+  adventure starts, a computer partner takes pokeldn's seat.
+- Scarlet/Violet Union Circle: join a console's circle as a guest. Union Circle - Quests gives the
+  host the BP you choose or every Blueberry Quest still missing for Snacksworth's legendaries.
+  Union Circle - Encounters spawns a wild Pokemon you craft around the host's player, to battle and
+  catch; with Legal encounters only, it spawns only where PKHeX accepts the catch as legal.
+- Language packs now translate game data too: species, moves, natures, abilities, forms and
+  PKHeX's legality messages show in the pack's language.
 
-Existing GTS listings continue to work; no relisting is needed.
-
-The radio firmware is unchanged at 1.6.1 and the controller firmware at 1.3.0; no board needs an
-update.
+The radio firmware stays at 1.6.2 and the controller firmware at 1.3.0; no board update is needed.
 
 pokeldn is an unofficial fan project, not affiliated with Nintendo or The Pokemon Company. It is not
 meant for commercial or promotional use; see the License section of the README.
@@ -27,12 +28,17 @@ meant for commercial or promotional use; see the License section of the README.
 | macOS, Apple silicon | `pokeldn-macos-arm64.zip` |
 | Windows, x64 | `pokeldn-windows-x64.zip` |
 | Linux, x64 | `pokeldn-linux-x64.tar.gz` |
+| Android, arm64 | `pokeldn-android-arm64.apk` |
+| iPhone and iPad (AltStore, SideStore) | `pokeldn-ios.ipa` |
 
 Each app includes PKHeX.Core and firmware for classic ESP32, ESP32-S3, ESP32-C3 and ESP32-C6. Python, .NET
 and ESP-IDF are bundled or unnecessary for running the app. Supply your own `prod.keys`.
-The separate `pokeldn-radio*.bin` (wireless) and `pokeldn-pad*.bin` (controller) files are merged
+The separate `pokeldn-radio*.bin` (wireless; `-ble` for Bluetooth wireless) and `pokeldn-pad*.bin` (controller) files are merged
 firmware images for manual flashing at address `0x0`; the app selects the right image for the
-connected chip. `SHA256SUMS` covers all nine downloads.
+connected chip. `SHA256SUMS` covers all thirteen downloads.
+
+Code signing policy: free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
+[SignPath Foundation](https://signpath.org); [what is signed, team roles and privacy](https://decryptu.github.io/pokeldn/code_signing.html).
 
 ## First run
 
@@ -58,7 +64,8 @@ Received Pokemon are saved in `Documents/pokeldn/Received`, with a configurable 
 - Trades in both directions: FireRed/LeafGreen, Let's Go Pikachu/Eevee, Sword/Shield, Brilliant
   Diamond/Shining Pearl, Legends Arceus, Scarlet/Violet and Legends Z-A.
 - Mystery Gift: FireRed/LeafGreen and Sword/Shield.
-- Tera Raids in both roles: Scarlet/Violet.
+- Tera Raids in both roles and the Union Circle as a guest: Scarlet/Violet.
+- Max Raid and Dynamax Adventure hosting: Sword/Shield.
 - Legal Pokemon preparation with PKHeX.Core, board detection and flashing, and session recordings.
 - An ESP32-S3 as a wired Switch controller or a classic ESP32 as a Bluetooth one, with macros.
 - Online trade over public relays, and a GTS for banked Pokemon.

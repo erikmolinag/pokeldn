@@ -69,10 +69,9 @@ def test_identify_needs_no_party_file():
     assert args.identify and args.party == []
 
 
-def test_every_translated_string_has_a_spanish_entry():
-    from gui import i18n
-    missing = []
-    for folder in ("gui", os.path.join("gui", "views")):
+def _tr_calls(*folders):
+    """(file:line, args) of every tr(...) call whose first argument is a literal, in these folders' files."""
+    for folder in folders:
         for name in sorted(os.listdir(os.path.join(ROOT, folder))):
             if not name.endswith(".py"):
                 continue
@@ -80,10 +79,34 @@ def test_every_translated_string_has_a_spanish_entry():
             for node in ast.walk(tree):
                 if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "tr"
                         and node.args and isinstance(node.args[0], ast.Constant)
-                        and isinstance(node.args[0].value, str) and node.args[0].value
-                        and node.args[0].value not in i18n.ES):
-                    missing.append(f"{folder}/{name}:{node.lineno} {node.args[0].value[:60]!r}")
+                        and isinstance(node.args[0].value, str) and node.args[0].value):
+                    yield f"{folder}/{name}:{node.lineno}", node.args
+
+
+def test_every_translated_string_has_a_spanish_entry():
+    """poke-app's own English-keyed text has Spanish in gui/i18n.py; upstream's keyed text (tr(key, default))
+    has it in the bundled language pack (gui/assets/lang/es)."""
+    import tomllib
+    from gui import i18n, language_pack
+    pack = tomllib.loads((language_pack.FOLDER / "strings.toml").read_text(encoding="utf-8"))
+    missing = []
+    for where, args in _tr_calls("gui", os.path.join("gui", "views"), os.path.join("pokeldn", "app")):
+        key = args[0].value
+        keyed = len(args) > 1
+        if (keyed and key not in pack) or (not keyed and "pokeldn" not in where and key not in i18n.ES):
+            missing.append(f"{where} {key[:60]!r}")
     assert not missing, "\n".join(missing)
+
+
+def test_the_spanish_pack_translates_every_upstream_key():
+    import tomllib
+    from gui import language_pack
+    english = tomllib.loads(open(os.path.join(ROOT, "pokeldn", "app", "data", "strings.en.toml"), "rb").read().decode())
+    spanish = tomllib.loads((language_pack.FOLDER / "strings.toml").read_text(encoding="utf-8"))
+    assert not [key for key in english if key not in spanish]
+    import string
+    fields = lambda text: sorted(f for _, f, _, _ in string.Formatter().parse(text) if f)   # noqa: E731
+    assert not [key for key in english if fields(english[key]) != fields(spanish[key])]
 
 
 def test_tr_falls_back_to_english_and_formats():

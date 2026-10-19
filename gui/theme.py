@@ -1,3 +1,7 @@
+from dataclasses import fields
+import base64
+import os
+
 import flet as ft
 import flet.canvas as cv
 
@@ -44,12 +48,17 @@ SILVER = "#8E9BAA"            # upstream's silver: second-best marks, read on wh
 BRAND_BLUE = ("#4FD9F5", "#4E61FC")   # upstream's logo gradients, used by its newer views
 BRAND_RED = ("#FAA555", "#FD474D")
 MONO = "monospace"
+CJK_FONT = "Noto Sans CJK SC"
+FONT_ASSETS = {CJK_FONT: "fonts/NotoSansCJKsc-Regular.otf"}
 CONTROL_HEIGHT = 36
 CONTROL_PADDING = ft.Padding(14, 8, 14, 8)
 CONTROL_RADIUS = 12
 GAP = 14
 SIDEBAR_WIDTH = 254
 SESSION_WIDTH = 360
+# A window narrower than this (a phone) shows one panel at a time and a bottom tab bar (docs/gui.md, Phones).
+COMPACT_WIDTH = 760
+compact = False
 
 
 def tint(alpha: float, color: str = TEXT) -> str:
@@ -58,9 +67,12 @@ def tint(alpha: float, color: str = TEXT) -> str:
 
 
 def app_theme() -> ft.Theme:
+    from pokeldn.app.i18n import font_family
     return ft.Theme(
+        font_family=font_family() or FONT,
+        text_theme=ft.TextTheme(**{f.name: ft.TextStyle(font_family_fallback=[CJK_FONT])
+                                   for f in fields(ft.TextTheme)}),
         color_scheme_seed=TEAL,
-        font_family=FONT,
         color_scheme=ft.ColorScheme(primary=ACCENT, on_primary=INK, secondary=INFO, surface=PANEL,
                                     on_surface=TEXT, error=RED, outline=BORDER,
                                     surface_container_highest=FIELD, on_surface_variant=MUTED),
@@ -73,7 +85,7 @@ def app_theme() -> ft.Theme:
 
 
 def text(value: str, size: float = 13, color: str = TEXT, weight=None, **kwargs) -> ft.Text:
-    kwargs.setdefault("style", ft.TextStyle(height=1.4))
+    kwargs.setdefault("style", ft.TextStyle(height=1.4, font_family_fallback=[CJK_FONT]))
     return ft.Text(value, size=size, color=color, weight=weight, **kwargs)
 
 
@@ -124,6 +136,40 @@ TOOLBAR_ITEM = 32   # the icon buttons are this size
 TOOLBAR_INSET = 4
 
 
+class Panes:
+    """A page's panels: side by side on a computer; on a phone one at a time, picked by name on a
+    switcher above them. `show` brings one forward, as choosing a tool brings its options."""
+
+    def __init__(self, *panes: tuple[str, str, ft.Control]):
+        self.panes = list(panes)
+        self.index = 0
+        if not compact:
+            self.control = ft.Row([p[2] for p in panes], spacing=GAP, expand=True,
+                                  vertical_alignment=ft.CrossAxisAlignment.STRETCH)
+            return
+        # Every pane stays on the page, hidden or not: a view updates its panes while another shows.
+        self.holders = [ft.Container(pane, expand=True, visible=i == 0) for i, (_, _, pane) in enumerate(panes)]
+        for _, _, pane in panes:
+            pane.width, pane.expand = None, True
+        self.switcher = ft.Container()
+        self.control = ft.Column([self.switcher, *self.holders], spacing=8, expand=True)
+        self._render()
+
+    def _render(self) -> None:
+        self.switcher.content = notch(segmented([(str(i), title, icon) for i, (title, icon, _) in enumerate(self.panes)],
+                                                str(self.index), lambda value: self.show(int(value))))
+
+    def show(self, index: int, update: bool = True) -> None:
+        if not compact or index == self.index:
+            return
+        self.index = index
+        for i, holder in enumerate(self.holders):
+            holder.visible = i == index
+        self._render()
+        if update and self.control.page:
+            self.control.update()
+
+
 def notch(*controls: ft.Control) -> ft.Row:
     """A small glass toolbar centred over the content; its groups are split by hairlines.
     Its corners are concentric with its items': outer radius = item radius + the even inset."""
@@ -139,9 +185,9 @@ def notch(*controls: ft.Control) -> ft.Row:
 
 def panel_header(title: str, *actions: ft.Control) -> ft.Container:
     return ft.Container(
-        ft.Row([text(title, 17, weight=ft.FontWeight.W_800), ft.Row(list(actions), spacing=2)],
+        ft.Row([text(title, 17, weight=ft.FontWeight.W_800, expand=True), ft.Row(list(actions), spacing=2)],
                alignment=ft.MainAxisAlignment.SPACE_BETWEEN, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-        padding=ft.Padding(18, 14, 12, 6), height=52)
+        padding=ft.Padding(18, 14, 12, 6))
 
 
 def section(title: str, body: ft.Control | None = None, trailing: ft.Control | None = None) -> ft.Column:
@@ -186,6 +232,12 @@ def card(title: str, body: ft.Control | None = None, description: str = "",
 
 
 def dialog(**kwargs) -> ft.AlertDialog:
+    content = kwargs.get("content")
+    if compact and isinstance(content, ft.Container) and (content.width or 0) > 280:
+        content.width = None     # a phone's dialog is as wide as the screen allows
+    if compact:
+        kwargs.setdefault("inset_padding", ft.Padding(14, 24, 14, 24))
+        kwargs.setdefault("actions_overflow_button_spacing", 8)
     return ft.AlertDialog(bgcolor=PANEL, elevation=24,
                           shape=ft.RoundedRectangleBorder(radius=26, side=ft.BorderSide(1, OUTLINE)),
                           barrier_color=ft.Colors.with_opacity(0.35, NAVY), **kwargs)
@@ -220,7 +272,8 @@ def field(label: str = "", value: str = "", hint: str = "", mono: bool = False, 
         kwargs.setdefault("input_filter", ft.InputFilter(f"^{'[0-9]' if digits else '.'}{count}$"))
     if digits:
         kwargs.setdefault("keyboard_type", ft.KeyboardType.NUMBER)
-    style = ft.TextStyle(size=13, color=TEXT, font_family=MONO if mono else None)
+    style = ft.TextStyle(size=13, color=TEXT, font_family=MONO if mono else None,
+                         font_family_fallback=[CJK_FONT])
     uniform = not kwargs.get("multiline") and not label and "height" not in kwargs
     if uniform:
         kwargs.setdefault("height", CONTROL_HEIGHT)
@@ -238,7 +291,8 @@ def field(label: str = "", value: str = "", hint: str = "", mono: bool = False, 
 def dropdown(options: list[tuple[str, str]], value: str | None, on_select=None, **kwargs) -> ft.Dropdown:
     return ft.Dropdown(value=value, options=[ft.DropdownOption(key=k, text=t) for k, t in options],
                        on_select=on_select, dense=True, filled=True, bgcolor=FIELD, border=_border(),
-                       text_size=13, expand=True, height=CONTROL_HEIGHT, content_padding=CONTROL_PADDING,
+                       text_size=13, text_style=ft.TextStyle(font_family_fallback=[CJK_FONT]),
+                       expand=True, height=CONTROL_HEIGHT, content_padding=CONTROL_PADDING,
                        trailing_icon=pixel_icon("chevron-down", color=MUTED),
                        selected_trailing_icon=pixel_icon("chevron-up", color=ACCENT),
                        menu_style=ft.MenuStyle(bgcolor=PANEL, shape=ft.RoundedRectangleBorder(radius=14)),
@@ -246,7 +300,7 @@ def dropdown(options: list[tuple[str, str]], value: str | None, on_select=None, 
 
 
 def labeled_control(label: str, control: ft.Control, **kwargs) -> ft.Column:
-    return ft.Column([ft.Container(text(label, 11, MUTED), height=16,
+    return ft.Column([ft.Container(text(label, 11, MUTED),
                                    alignment=ft.Alignment.CENTER_LEFT), control],
                      spacing=4, tight=True, **kwargs)
 
@@ -270,7 +324,8 @@ def button(label: str, on_click=None, icon=None, color: str = ACCENT, filled: bo
         shape=ft.StadiumBorder(), padding=ft.Padding(18, 8, 18, 8),
         side={ft.ControlState.FOCUSED: ft.BorderSide(2, ft.Colors.with_opacity(0.5, ACCENT)),
               ft.ControlState.DEFAULT: ft.BorderSide(0, ft.Colors.TRANSPARENT)},
-        text_style=ft.TextStyle(size=13, weight=ft.FontWeight.W_800, font_family=FONT),
+        text_style=ft.TextStyle(size=13, weight=ft.FontWeight.W_800, font_family=FONT,
+                                font_family_fallback=[CJK_FONT]),
         overlay_color={ft.ControlState.DEFAULT: ft.Colors.TRANSPARENT,
                        ft.ControlState.HOVERED: ft.Colors.with_opacity(0.10, "#FFFFFF" if filled else TEXT),
                        ft.ControlState.PRESSED: ft.Colors.with_opacity(0.12, "#000000")},
@@ -376,7 +431,10 @@ def fade(scrollable: ft.ScrollableControl, size: float = 24) -> ft.ShaderMask:
         mask.shader = shader
         return changed
 
+    # A scroll or size event otherwise ends in Flet's automatic update of the whole page: on a phone,
+    # where a run shares the interpreter, an auto-scrolling log cost 72 ms per line (examples/android).
     def resized(e) -> None:
+        ft.context.disable_auto_update()
         edges["height"] = e.height
         if paint():
             mask.update()
@@ -384,6 +442,7 @@ def fade(scrollable: ft.ScrollableControl, size: float = 24) -> ft.ShaderMask:
     previous = scrollable.on_scroll
 
     def scrolled(e) -> None:
+        ft.context.disable_auto_update()
         top, bottom = e.pixels > e.min_scroll_extent + 1, e.pixels < e.max_scroll_extent - 1
         if (top, bottom) != (edges["top"], edges["bottom"]):
             edges["top"], edges["bottom"] = top, bottom
@@ -432,3 +491,11 @@ def step_list(steps: list[str]) -> ft.Column:
             ft.Container(text(step, 13), expand=True, padding=ft.Padding(0, lead, 0, gap)),
         ], spacing=10, intrinsic_height=True, vertical_alignment=ft.CrossAxisAlignment.STRETCH))
     return ft.Column(rows, spacing=0, tight=True)
+
+
+def image_src(data: bytes) -> bytes | str:
+    """An image's bytes as an ft.Image src. iOS's WKWebView draws nothing for a bytes src and draws a
+    data URI (examples/ios/README.md); the decoder reads the format from the bytes, not the label."""
+    if os.environ.get("POKELDN_PLATFORM") == "ios":
+        return "data:image/png;base64," + base64.b64encode(data).decode()
+    return data

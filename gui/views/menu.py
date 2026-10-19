@@ -38,21 +38,25 @@ WHITE_SOFT = ft.Colors.with_opacity(0.92, "#FFFFFF")
 class Tile:
     """One menu button: white with a gradient badge, or the big gradient one. The cursor frames the selected."""
 
-    def __init__(self, icon: str, title: str, detail: str, shape: str, on_open, on_hover):
+    def __init__(self, icon: str, title: str, detail: str, shape: str, on_open, on_hover, compact: bool = False):
         hero = shape == "hero"
-        name = t.text(tr(title), 34 if hero else 21 if shape == "wide" else 19, t.INK if hero else t.TEXT,
-                      weight=ft.FontWeight.W_900, max_lines=1)
-        about = t.text(tr(detail), 15 if hero else 13, WHITE_SOFT if hero else t.MUTED, weight=ft.FontWeight.W_600,
-                       max_lines=2, overflow=ft.TextOverflow.ELLIPSIS)
+        name = t.text(tr(title), (26 if compact else 34) if hero else 21 if shape == "wide" else 16 if compact else 19,
+                      t.INK if hero else t.TEXT, weight=ft.FontWeight.W_900, max_lines=1)
+        about = t.text(tr(detail), 15 if hero else 12 if compact else 13, WHITE_SOFT if hero else t.MUTED,
+                       weight=ft.FontWeight.W_600, max_lines=1 if compact and not hero else 2,
+                       overflow=ft.TextOverflow.ELLIPSIS)
         if hero:
+            circle = 56 if compact else 80
             body = ft.Stack([
                 ft.Container(ft.Image(src="ring.svg", width=330, height=330, opacity=0.16), right=-80, bottom=-110),
                 ft.Container(ft.Column([
-                    ft.Container(t.pixel_icon(icon, size=40, color=t.INK), width=80, height=80, border_radius=40,
+                    ft.Container(t.pixel_icon(icon, size=28 if compact else 40, color=t.INK), width=circle,
+                                 height=circle, border_radius=circle / 2,
                                  bgcolor=ft.Colors.with_opacity(0.22, "#FFFFFF"), alignment=ft.Alignment.CENTER),
                     ft.Container(expand=True),
                     name, about,
-                ], spacing=4), padding=ft.Padding(30, 28, 30, 26), left=0, top=0, right=0, bottom=0),
+                ], spacing=4), padding=ft.Padding(20, 18, 20, 16) if compact else ft.Padding(30, 28, 30, 26),
+                    left=0, top=0, right=0, bottom=0),
             ], expand=True)
         elif shape == "wide":
             body = ft.Container(ft.Row([
@@ -61,8 +65,9 @@ class Tile:
                 t.pixel_icon("chevron-right", size=28, color=t.FAINT),
             ], spacing=18, vertical_alignment=ft.CrossAxisAlignment.CENTER), padding=ft.Padding(22, 0, 16, 0))
         else:
-            body = ft.Container(ft.Column([t.badge_icon(icon, 52, 26), ft.Container(expand=True), name, about],
-                                          spacing=2), padding=ft.Padding(20, 20, 18, 18))
+            badge = t.badge_icon(icon, 42, 22) if compact else t.badge_icon(icon, 52, 26)
+            body = ft.Container(ft.Column([badge, ft.Container(expand=True), name, about], spacing=2),
+                                padding=ft.Padding(16, 14, 14, 14) if compact else ft.Padding(20, 20, 18, 18))
         self.control = ft.Container(body, border_radius=28, bgcolor=None if hero else t.PANEL,
                                     gradient=t.gradient() if hero else None, clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
                                     on_click=lambda e: on_open(),
@@ -82,20 +87,32 @@ class MenuView:
         self.app = app
         self.selected = 0
         self.visible = False
-        self.tiles = [Tile(icon, title, detail, shape, lambda k=key: app.navigate(k), lambda i=i: self.select(i))
+        compact = t.compact   # a phone: the card, Trade, then the others two to a row, scrolling
+        self.tiles = [Tile(icon, title, detail, shape if shape == "hero" or not compact else "small",
+                           lambda k=key: app.navigate(k), lambda i=i: self.select(i), compact)
                       for i, (key, icon, title, detail, shape) in enumerate(ENTRIES)]
         trade, gift, team, *small = [tile.control for tile in self.tiles]
-        trade.expand, gift.expand, team.expand = 5, 1, 1
-        for tile in small:
-            tile.expand = 1
-        stretch = ft.CrossAxisAlignment.STRETCH
-        grid = ft.Column([
-            ft.Row([trade, ft.Column([gift, team], spacing=20, expand=4)], spacing=20, expand=3,
-                   vertical_alignment=stretch),
-            ft.Row(small, spacing=20, expand=2, vertical_alignment=stretch),
-        ], spacing=20, expand=True)
-        self.card = ft.Container(width=TRAINER_WIDTH)
-        self.control = ft.Row([self.card, grid], spacing=28, expand=True, vertical_alignment=stretch)
+        if compact:
+            trade.height = 176
+            others = [gift, team, *small]
+            for tile in others:
+                tile.height, tile.expand = 118, 1
+            self.card = ft.Container()
+            self.control = ft.ListView([self.card, trade, *[ft.Row(others[i:i + 2], spacing=12)
+                                                             for i in range(0, len(others), 2)]],
+                                       spacing=12, padding=ft.Padding(2, 2, 2, 16), expand=True)
+        else:
+            trade.expand, gift.expand, team.expand = 5, 1, 1
+            for tile in small:
+                tile.expand = 1
+            stretch = ft.CrossAxisAlignment.STRETCH
+            grid = ft.Column([
+                ft.Row([trade, ft.Column([gift, team], spacing=20, expand=4)], spacing=20, expand=3,
+                       vertical_alignment=stretch),
+                ft.Row(small, spacing=20, expand=2, vertical_alignment=stretch),
+            ], spacing=20, expand=True)
+            self.card = ft.Container(width=TRAINER_WIDTH)
+            self.control = ft.Row([self.card, grid], spacing=28, expand=True, vertical_alignment=stretch)
         app.trainer_listeners.append(self._changed)
         self.render()
 
@@ -126,7 +143,7 @@ class MenuView:
             return
         self.selected = index
         for i, tile in enumerate(self.tiles):
-            tile.paint(i == index)
+            tile.paint(i == index and not t.compact)
         self.control.update()
 
     def _changed(self) -> None:
@@ -138,17 +155,19 @@ class MenuView:
 
     def render(self) -> None:
         for i, tile in enumerate(self.tiles):
-            tile.paint(i == self.selected)
+            tile.paint(i == self.selected and not t.compact)   # a phone has no arrows to move a cursor
         self.card.content = self.trainer_card()
 
     def trainer_card(self) -> ft.Control:
         """HOME's profile: a gradient band, the avatar over its edge, the IDs and the team in box cells."""
         mine = self.app.settings.my_trainer
         known = bool(mine.get("name"))
+        c = t.compact
+        size = 76 if c else 108
         name, gender = (mine["name"], int(mine.get("gender") or 0)) if known else (tr("Trainer"), 0)
-        avatar = ft.Container(t.text((name[:1] or "?").upper() if known else "?", 46, t.INK,
+        avatar = ft.Container(t.text((name[:1] or "?").upper() if known else "?", 32 if c else 46, t.INK,
                                      weight=ft.FontWeight.W_900),
-                              width=108, height=108, border_radius=54, alignment=ft.Alignment.CENTER,
+                              width=size, height=size, border_radius=size / 2, alignment=ft.Alignment.CENTER,
                               bgcolor=(GIRL if gender else BOY) if known else t.FAINT,
                               border=ft.Border.all(5, "#FFFFFF"), shadow=t.SHADOW)
         band = ft.Container(ft.Stack([
@@ -156,7 +175,7 @@ class MenuView:
             ft.Container(ft.Row([ft.Image(src="pokeball.svg", width=22, height=22),
                                  t.text(tr("TRAINER CARD"), 13, t.INK, weight=ft.FontWeight.W_900)], spacing=8),
                          left=24, top=20),
-        ]), left=0, top=0, right=0, height=120, gradient=t.gradient(ft.Alignment.CENTER_LEFT,
+        ]), left=0, top=0, right=0, height=80 if c else 120, gradient=t.gradient(ft.Alignment.CENTER_LEFT,
                                                                        ft.Alignment.CENTER_RIGHT))
         if known:
             tid, sid = int(mine["tid"]), int(mine["sid"])
@@ -165,8 +184,8 @@ class MenuView:
             sub = ft.Row([t.pixel_icon("female" if gender else "male", size=17, color=GIRL if gender else BOY),
                           t.text(f"{tr('Girl') if gender else tr('Boy')} · {game} · {language}", 14, t.MUTED,
                                  weight=ft.FontWeight.W_700)], spacing=3, tight=True)
-            facts = ft.Row([self._fact(tr("TRAINER ID"), f"{tid:05d}"), self._fact(tr("SECRET ID"), f"{sid:05d}"),
-                            self._fact(tr("SHINY VALUE"), str(shiny_value(tid, sid)))], spacing=10)
+            facts = ft.Row([self._fact(tr("TRAINER ID"), f"{tid:05d}", c), self._fact(tr("SECRET ID"), f"{sid:05d}", c),
+                            self._fact(tr("SHINY VALUE"), str(shiny_value(tid, sid)), c)], spacing=8 if c else 10)
         else:
             sub = t.text(tr("Your trainer is not read yet"), 14, t.MUTED, weight=ft.FontWeight.W_700)
             facts = ft.Container(ft.Column([
@@ -175,14 +194,16 @@ class MenuView:
             ], spacing=12, tight=True), padding=16, border_radius=18, bgcolor=t.CARD)
         head = ft.Stack([
             band,
-            ft.Container(avatar, left=22, top=66),
-            ft.Container(ft.Column([t.text(name, 30, weight=ft.FontWeight.W_900, max_lines=1), sub], spacing=0,
-                                   tight=True), left=146, top=126, right=12),
-        ], height=196)
-        cells = self.team_slots()
-        # Two rows of three box cells that share the card's remaining height, as a HOME box fills its screen.
-        box = ft.Column([ft.Row(cells[i:i + 3], spacing=10, expand=1, vertical_alignment=ft.CrossAxisAlignment.STRETCH)
-                         for i in (0, 3)], spacing=10, expand=True)
+            ft.Container(avatar, left=16 if c else 22, top=40 if c else 66),
+            ft.Container(ft.Column([t.text(name, 22 if c else 30, weight=ft.FontWeight.W_900, max_lines=1), sub],
+                                   spacing=0, tight=True), left=104 if c else 146, top=84 if c else 126, right=12),
+        ], height=136 if c else 196)
+        cells = self.team_slots(46 if c else 64)
+        # Two rows of three box cells that share the card's remaining height, as a HOME box fills its screen;
+        # a phone's card is as tall as its content, the six cells one row.
+        box = (ft.Row(cells, spacing=6, height=58) if c else
+               ft.Column([ft.Row(cells[i:i + 3], spacing=10, expand=1, vertical_alignment=ft.CrossAxisAlignment.STRETCH)
+                          for i in (0, 3)], spacing=10, expand=True))
         rows: list[ft.Control] = [facts, ft.Container(height=2),
                                   t.text(tr("READY TO TRADE"), 12, t.MUTED, weight=ft.FontWeight.W_900), box]
         if known:
@@ -191,25 +212,31 @@ class MenuView:
                                    expand=True),
                 t.button(tr("Read again"), lambda e: self.app.navigate("trainer"), "refresh", expand=True),
             ], spacing=10))
+        if c:
+            return t.glass(ft.Column([head, ft.Container(ft.Column(rows, spacing=10, tight=True),
+                                                         padding=ft.Padding(14, 2, 14, 14))],
+                                     spacing=0, tight=True), radius=24)
         return t.glass(ft.Column([
             head,
             ft.Container(ft.Column(rows, spacing=12, expand=True), padding=ft.Padding(22, 4, 22, 22), expand=True),
         ], spacing=0, expand=True), radius=30)
 
     @staticmethod
-    def _fact(label: str, value: str) -> ft.Control:
-        return ft.Container(ft.Column([t.text(label, 10, t.MUTED, weight=ft.FontWeight.W_900, max_lines=1),
-                                       t.text(value, 24, t.TEXT, weight=ft.FontWeight.W_900)], spacing=0, tight=True),
-                            expand=1, padding=ft.Padding(14, 10, 10, 10), border_radius=16, bgcolor=t.CARD)
+    def _fact(label: str, value: str, compact: bool = False) -> ft.Control:
+        return ft.Container(ft.Column([t.text(label, 9 if compact else 10, t.MUTED, weight=ft.FontWeight.W_900, max_lines=1),
+                                       t.text(value, 18 if compact else 24, t.TEXT, weight=ft.FontWeight.W_900)],
+                                      spacing=0, tight=True),
+                            expand=1, padding=ft.Padding(10, 8, 8, 8) if compact else ft.Padding(14, 10, 10, 10),
+                            border_radius=14 if compact else 16, bgcolor=t.CARD)
 
-    def team_slots(self) -> list[ft.Control]:
+    def team_slots(self, size: int = 64) -> list[ft.Control]:
         """The Pokemon queued on Trade (Host), as six cells of a HOME box."""
         values = self.app.settings.tool_values.get("frlg-trade-host", {}).get("values", {})
         field = next((f for f in _trade_tool().fields if f.kind == "pokemon"), None)
         offers = [o for o in command.offers(command.value_of(field, values))[:6] if o.get("file")] if field else []
         slots = []
         for offer in offers:
-            sprite = Sprite(self.app, int(offer.get("species") or 0), bool(offer.get("shiny")), size=64)
+            sprite = Sprite(self.app, int(offer.get("species") or 0), bool(offer.get("shiny")), size=size)
             sprite.frame.bgcolor, sprite.frame.border = None, None
             slots.append(self._cell(sprite.control, offer.get("summary") or None))
         while len(slots) < 6:

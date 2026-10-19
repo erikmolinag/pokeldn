@@ -52,7 +52,8 @@ class TabsView:
         self.render()
 
     def render(self) -> None:
-        self.tabs.content = t.segmented([(k, tr(label), icon) for k, label, icon in self.TABS], self.tab, self.pick)
+        self.tabs.content = t.segmented([(k, tr(label), icon) for k, label, icon in self.TABS], self.tab, self.pick,
+                                       wrap=t.compact)
         self.body.content = self.views[self.tab].control
 
     def pick(self, tab: str) -> None:

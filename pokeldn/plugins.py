@@ -5,6 +5,8 @@ data folder's `plugins/` (enabled in Settings) or named in POKELDN_PLUGINS (os.p
 folders, always loaded), or an installed package under the `pokeldn.plugins` entry point group.
 Plugins run with the program's full access; none is loaded unless enabled. docs/plugins.md.
 """
+from __future__ import annotations
+
 import importlib.util
 import json
 import os
@@ -16,11 +18,16 @@ from importlib import metadata
 from pathlib import Path
 from typing import Callable
 
-from pokeldn.app.catalog import Field, Game, Tool   # noqa: F401  (re-exported for plugins)
+def __getattr__(name):
+    if name in ("Field", "Game", "Tool"):
+        from pokeldn.app import catalog
+        return getattr(catalog, name)
+    raise AttributeError(name)
+
 
 # docs/plugins.md, Versions: a removal or a change of meaning raises the major, an addition the level.
 API_VERSION = 1                    # the major this pokeldn serves
-API_LEVEL = 2                      # 1.1 added api.data and api.level, 1.2 pokeldn.popup
+API_LEVEL = 9                      # 1.9 language-pack resources; docs/plugins.md, Versions
 API_OLDEST = 1                     # an older major is refused
 DEPRECATED: dict[int, str] = {}    # a served major due for removal -> the release that drops it
 ENTRY_POINT_GROUP = "pokeldn.plugins"
@@ -39,12 +46,27 @@ class Plugin:
     icon: str = ""                        # an image file in the folder
     api: tuple | None = (API_VERSION, 0)   # (major, level) from plugin.toml; None when unreadable
     module: str = "plugin"
+    locale: str = ""
+    translations: dict = field(default_factory=dict)
+    resources: dict = field(default_factory=dict)
+    library: str = ""                     # a folder the player sees, named in plugin.toml (1.7)
+    library_sort: str = ""                # its order until the player picks one (1.8)
     entry_point: object = None
     error: str = ""                       # why it did not load; empty once registered
     loaded: bool = False
     tools: list = field(default_factory=list)    # (game key, Tool)
     games: list = field(default_factory=list)
     radios: list = field(default_factory=list)   # scheme names
+    battle_servers: list = field(default_factory=list)   # (game, name)
+
+
+@dataclass(frozen=True)
+class BattleServer:
+    game: str
+    name: str
+    label: str
+    factory: Callable      # (bootstrap, partners) -> a server (docs/plugins.md, A battle server)
+    plugin: str = ""
 
 
 @dataclass(frozen=True)
@@ -64,6 +86,11 @@ class API:
     def __init__(self, plugin: Plugin):
         self.plugin = plugin
         self.folder = plugin.folder
+
+    @property
+    def library(self) -> Path:
+        """The player-visible folder plugin.toml's `library` names, created on first use (1.7)."""
+        return library_folder(self.plugin.id)
 
     @property
     def data(self) -> Path:
@@ -107,6 +134,16 @@ class API:
         _radios[scheme] = Radio(scheme, label or scheme, install, self.plugin.id)
         self.plugin.radios.append(scheme)
 
+    def add_battle_server(self, game: str, name: str, factory: Callable, label: str = "") -> None:
+        """Lets a host launcher serve `game`'s raid battle itself: `factory(bootstrap, partners)`
+        returns the battle server for one raid (1.6; only "sv" takes one)."""
+        if game not in BATTLE_GAMES:
+            raise ValueError(f"no battle server is taken for game {game!r}")
+        if not name.isidentifier() or (game, name) in _battle_servers:
+            raise ValueError(f"battle server {name!r} is already taken or not a plain name")
+        _battle_servers[(game, name)] = BattleServer(game, name, label or name, factory, self.plugin.id)
+        self.plugin.battle_servers.append((game, name))
+
 
 def parse_api(value) -> tuple | None:
     """plugin.toml's api: 1 is (1, 0), "1.1" is (1, 1)."""
@@ -140,6 +177,8 @@ def compatibility(api: tuple | None) -> tuple[str, str]:
 
 _loaded: dict[str, Plugin] = {}
 _radios: dict[str, Radio] = {}
+_battle_servers: dict[tuple, BattleServer] = {}
+BATTLE_GAMES = ("sv",)
 _done = False
 generation = 0          # counts reloads, so a view knows its catalog is stale
 
@@ -151,6 +190,42 @@ def _builtin_games() -> tuple[Game, ...]:
 
 def _builtin_tool_keys() -> set[str]:
     return {t.key for g in _builtin_games() for t in g.tools}
+
+
+# Folders the app's own features keep beside a plugin's library, by their case-folded name.
+RESERVED_LIBRARIES = frozenset(("bank", "gts", "logs", "macros", "plugin-data", "plugin-panels", "plugins", "pokemon", "received",
+                                "saves", "session"))
+
+WINDOWS_DEVICES = frozenset(("CON", "PRN", "AUX", "NUL", *(f"{p}{n}" for p in ("COM", "LPT") for n in range(1, 10))))
+
+
+def library_name(value) -> str:
+    """plugin.toml's `library`, checked: a plain folder name no built-in feature uses; ValueError otherwise."""
+    name = value if isinstance(value, str) else ""
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,39}", name) or name.endswith((" ", ".")):
+        raise ValueError("plugin.toml's library is a folder name of up to 40 letters, digits, spaces, dots, "
+                         "dashes or underscores")
+    if name.split(".")[0].upper() in WINDOWS_DEVICES:
+        raise ValueError(f"plugin.toml's library {name!r} is a device name on Windows")
+    if name.casefold() in RESERVED_LIBRARIES:
+        raise ValueError(f"plugin.toml's library {name!r} is the name of one of pokeldn's own folders")
+    return name
+
+
+def library_path(name: str) -> Path:
+    from pokeldn.app.paths import LIBRARIES
+    return LIBRARIES / name
+
+
+def library_folder(plugin_id: str) -> Path:
+    """The library of the plugin `plugin_id`, created on first use; a tool's script calls it (1.7).
+    LookupError when that plugin names none."""
+    plugin = _loaded.get(plugin_id) or next((p for p in discover() if p.id == plugin_id), None)
+    if plugin is None or not plugin.library:
+        raise LookupError(f"plugin {plugin_id!r} names no library in its plugin.toml")
+    path = library_path(plugin.library)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def folder() -> Path:
@@ -192,6 +267,30 @@ def _read_folder(path: Path) -> Plugin:
     plugin.icon = str(path / icon) if icon and (path / icon).is_file() and "/" not in icon else ""
     plugin.module = str(meta.get("module", "plugin"))
     plugin.api = parse_api(meta.get("api"))
+    if "library" in meta:
+        try:
+            plugin.library = library_name(meta["library"])
+        except ValueError as error:
+            plugin.error = str(error)
+    if "library_sort" in meta:
+        from pokeldn.app.library import SORTS
+        if meta["library_sort"] in SORTS:
+            plugin.library_sort = meta["library_sort"]
+        else:
+            plugin.error = f"plugin.toml's library_sort is one of {', '.join(SORTS)}"
+    if "locale" in meta or "strings" in meta:
+        from pokeldn.app.i18n import read_pack, read_resources
+        def read_resource(name):
+            resource = (path / name).resolve()
+            if not resource.is_relative_to(path.resolve()):
+                raise ValueError("Language pack resources must remain inside the plugin folder.")
+            return resource.read_bytes()
+        try:
+            plugin.translations = read_pack(meta, read_resource)
+            plugin.resources = read_resources(meta, read_resource)
+            plugin.locale = meta["locale"]
+        except ValueError as error:
+            plugin.error = str(error)
     return plugin
 
 
@@ -225,6 +324,8 @@ def _register(plugin: Plugin) -> None:
     state, message = compatibility(plugin.api)
     if state in ("newer", "older"):
         raise RuntimeError(message)
+    if plugin.locale:
+        return
     if plugin.entry_point is not None:
         module = plugin.entry_point.load()
     else:
@@ -251,11 +352,16 @@ def load() -> list[Plugin]:
     wanted = [p for p in discover() if named(p) or p.id in on]
     if wanted:
         _guard(wanted)
+    libraries: dict[str, str] = {}
     for plugin in wanted:
         _loaded[plugin.id] = plugin
-        if plugin.error:          # plugin.toml did not parse
+        if plugin.library and not plugin.error:
+            owner = libraries.setdefault(plugin.library.casefold(), plugin.id)
+            if owner != plugin.id:
+                plugin.error = f"its library {plugin.library!r} is already the plugin {owner!r}'s"
+        if plugin.error:          # plugin.toml did not parse, or names another's library
             continue
-        radios_before = dict(_radios)
+        radios_before, servers_before = dict(_radios), dict(_battle_servers)
         if watch:
             _marker().write_text(plugin.id, encoding="utf-8")
         try:
@@ -268,6 +374,9 @@ def load() -> list[Plugin]:
             plugin.radios.clear()
             _radios.clear()
             _radios.update(radios_before)
+            plugin.battle_servers.clear()
+            _battle_servers.clear()
+            _battle_servers.update(servers_before)
         finally:
             if watch:
                 _marker().unlink(missing_ok=True)
@@ -288,7 +397,9 @@ def _guard(wanted: list[Plugin]) -> None:
                 spec = None
             if spec is not None and spec.origin:     # a package's folder, or a lone module's own file
                 code += list(spec.submodule_search_locations or [spec.origin])
-    plugin_guard.install(code, [folder(), DATA / "plugin-data", SESSION, LOGS, tempfile.gettempdir(), *_named()])
+    libraries = [library_path(p.library) for p in wanted if p.library and not p.error]
+    plugin_guard.install(code, [folder(), DATA / "plugin-data", SESSION, LOGS, tempfile.gettempdir(), *_named(),
+                                *libraries])
 
 
 watch = False     # the app sets it: a plugin that ends the app while registering is named at its next start
@@ -352,6 +463,17 @@ def radios() -> list[Radio]:
     return list(_radios.values())
 
 
+def battle_servers(game: str) -> list[BattleServer]:
+    load()
+    return [s for s in _battle_servers.values() if s.game == game]
+
+
+def battle_server(game: str, name: str = "") -> BattleServer | None:
+    """The loaded plugin battle server for `game` named `name`, or the first one when `name` is empty."""
+    found = [s for s in battle_servers(game) if not name or s.name == name]
+    return found[0] if found else None
+
+
 def _reset() -> None:
     """Forgets every loaded plugin; for tests."""
     global _done
@@ -359,6 +481,7 @@ def _reset() -> None:
     _done = False
     _loaded.clear()
     _radios.clear()
+    _battle_servers.clear()
     plugin_guard.clear()
 
 

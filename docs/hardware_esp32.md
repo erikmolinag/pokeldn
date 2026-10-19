@@ -19,6 +19,7 @@ host. `pokeldn.ldn.esp32_wlan` gives the LDN library a factory backed by the boa
 | ESP32-S3 | native USB Serial/JTAG | `pokeldn-radio-s3.bin` |
 | ESP32-C3 | native USB Serial/JTAG | `pokeldn-radio-c3.bin` |
 | ESP32-C6 | native USB Serial/JTAG | `pokeldn-radio-c6.bin` |
+| classic ESP32, ESP32-C6 | Bluetooth LE (the iOS app), and USB as above | `pokeldn-radio-ble.bin`, `pokeldn-radio-ble-c6.bin` |
 
 All targets use 2.4 GHz. ESP32-S2 is unsupported. The Seeed Studio XIAO ESP32C3 and XIAO
 ESP32S3 have no onboard antenna and need their supplied external one attached; larger S3 boards
@@ -102,15 +103,19 @@ bootloader. A XIAO ESP32S3 with recalibration off answered 300 of 300 opens. The
 With recalibration off, 4 of 600 opens on a C6 found no answer once and a working link on the next
 open, after macOS re-enumerated the device ("Device not configured").
 
-The C6 build also carries a USB watch (`usbwatch.c`): it samples the SOF frame
+The C6 and S3 builds carry a USB watch (`usbwatch.c`): it samples the SOF frame
 number every 5 ms and, once frames have counted or the host has sent a byte, restarts the chip
 after a 2 s stall and reports the USB and clock registers from before and after it as LOG lines on
-the next HELLO. Built with `POKELDN_USB_BEACON=1` in the environment of `idf.py`, the C6 image also
+the next HELLO. This detects a stopped USB frame clock; a stalled driver can leave SOFs advancing,
+and restarting the chip is not a guarantee that a wedged USB peripheral recovers. The active
+transfer ends on restart. Built with `POKELDN_USB_BEACON=1` in the environment of `idf.py`, either image also
 sends those registers, the SOF changes it has seen and the host bytes it has read once a second, as
 a vendor action frame (category 127, OUI `02:55:53`) to the group address `03:55:53:42:57:00`; a
 sniffing board keeps them with `esp32_sniff.py --mac 03:55:53:42:57:00` while the USB link is dead.
 The frame body after the 4-byte vendor header is u32 little-endian: uptime ms, SOF changes, host
-bytes, `wire_dropped`, stall count, then the sixteen registers listed in `usbwatch.c`.
+bytes, `wire_dropped`, stall count, then the sixteen target-specific registers listed in `usbwatch.c`.
+The S3 snapshots its USB endpoints, SYSTEM clocks and resets, and GPIO19/20; the C6 snapshots its
+USB endpoints, PCR clocks and resets, and GPIO12/13. S3 support starts with firmware 1.6.2.
 
 ## Roles
 
@@ -179,7 +184,7 @@ the ROM's boot text included, fails the checksum and is discarded.
 | `0x07` AP_KICK | host | 6 MAC, u16 reason; deauthenticates |
 | `0x08` ETH_TX | host | an Ethernet frame, encrypted by the driver with the station's or the group key. A full driver queue (`ESP_ERR_NO_MEM`) is retried every 1 ms for up to 100 ms; a frame to a departed station fails at once with `0x3015` (`ESP_ERR_WIFI_NOT_ASSOC`). A station sends the Ethernet source as its 802.11 transmitter address: a source other than the MAC in LINK is never acknowledged (49 of 49) |
 | `0x09` RAW_TX | host | an 802.11 frame without FCS (`esp_wifi_80211_tx`); advertisements |
-| `0x0A` SNIFF | host | u8 channel, 6 MAC; every management and data frame to or from it, whole, as RX_SNIFF; MAC ff:ff:ff:ff:ff:ff sends every frame on the channel as RX_CENSUS |
+| `0x0A` SNIFF | host | u8 channel, 6 MAC; every management and data frame to or from it and every action frame on the channel (an LDN advertisement keys the network a console moves to), whole, as RX_SNIFF; MAC ff:ff:ff:ff:ff:ff sends every frame on the channel as RX_CENSUS |
 | `0x0B` STATUS | host | none; answered by STATUS |
 | `0x0C` BENCH | host | u32 bytes, u16 message size (8 to 1600); RESULT, then BENCH messages as fast as the UART takes them |
 | `0x0D` LED | host | u8 pattern, u8 peak brightness, u16 period ms (0: the pattern's default), u16 duration ms (0: until the next LED); RESULT. Older firmware answers `0x106` |
@@ -305,7 +310,14 @@ count repeated unchanged for 0.3 s means bytes were lost on the line and the hos
 a busy reader holds up to 0.7 s, and a resync then puts 16 KB in flight against a 16 KB ring. Written-off
 bytes stay written off; a CREDIT past what the loss allows shrinks it. A CREDIT jumps the
 outgoing queue (at most one queued) yet arrives about 0.5 s late behind a Scarlet seat's 150 KB/s of
-RX_ETH. A board without CREDIT never opens the window and the host writes unthrottled. The board logs a
+RX_ETH. A board without CREDIT never opens the window and the host writes unthrottled. The count is a
+u32 (`wire.c` `s_consumed`); the host unwraps it against its own byte count, so a stream past 4 GiB
+keeps its window. The board credits every 1024 bytes it reads (`wire.c` `CREDIT_STEP`), so a CREDIT
+can count part of a 1.5 KB ETH_TX whose write has not returned; the host counts it against the bytes
+written plus the frame on the line. Refused, the frame's tail stays short of the next step and the
+window shuts until the idle CREDIT about 20 ms later: on an ESP32-S3 over USB (firmware 1.6.2, Windows),
+3000 back-to-back 1514-byte ETH_TX took 15.9 s refused and 8.5 s counted (0.29 against 0.54 MB/s), and
+a TCP transfer to a Switch went from 0.31 to 0.52 MB/s. The board logs a
 command over 50 ms (`slow command`) and a reader turn over 100 ms (`reader held`).
 
 With the idle count and the CREDIT ahead of the queue, the board counted every ETH_TX the host handed
@@ -709,6 +721,67 @@ S3, C3 and C6: `0x0`) before writing, including custom images. esptool 5.4.0's `
 chip check when a merged image starts with padding. Never choose firmware from a USB bridge ID.
 [Desktop builds](gui.md) covers packaging all four images.
 
+### Bluetooth
+
+A build with `POKELDN_BLE=1` also carries the host link over Bluetooth LE, for a host with no USB
+serial: an iPhone app cannot open a USB serial device without Apple's MFi accessory program, and
+CoreBluetooth needs nothing of the kind. The board then needs USB only for power.
+
+    POKELDN_BLE=1 idf.py -B ../../scratchpad/esp/build-ble \
+        -D SDKCONFIG=../../scratchpad/esp/build-ble/sdkconfig \
+        -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.ble" build
+
+The board advertises as `POKELDN-RADIO` with service `7a1e0101-5d2c-4c3e-9f4b-504f4b454c44`: the
+host writes the COBS stream to `...0102` (write without response) and the board notifies its own on
+`...0103`. While a central is subscribed to `...0103`, the wire reads and writes there and the cable
+falls silent; unsubscribed, the cable carries the link as before. Framing, CRC and CREDIT are
+unchanged. The board asks for a 15 ms connection interval, the 2M PHY and a 247 byte MTU.
+Its HELLO text ends in `link=ble`, which the Board page shows as the Bluetooth wireless firmware.
+`POKELDN_RADIO=esp32:ble` (or `esp32:ble:NAME`) opens it from any launcher (`pokeldn/ldn/esp32_ble.py`,
+bleak).
+
+On a classic ESP32 the dual-mode controller left 32 KB of free heap, under the wire's 64 KB floor, so
+`wire_send` refused every message and only CREDIT (which bypasses the floor) reached the host.
+`sdkconfig.defaults.ble` takes the BLE-only controller and 10 static Wi-Fi RX buffers instead of 25,
+and `ble.c` releases the Classic Bluetooth memory and sizes its receive buffer at 10 KB (FLOW_WINDOW
+plus one frame): 60 KB free before that last step, enough after it. Measured from a Mac: connect and
+HELLO in 1.3 to 1.7 s, 63 ms per HELLO round trip (200 in a row), about two connection intervals.
+
+The radio shares its antenna between Wi-Fi and Bluetooth (software coexistence), so every BLE
+connection event takes air time from the console's channel. What that costs a link loop is unmeasured.
+
+A FireRed host over BLE from a Mac: the console joined and sat on "awaiting POKELDN's response"
+while the host held frames for acks 6 behind. The air was clean (`tx_eth_failed=0`); the link to the
+host was not: `wire_dropped=7056`, `refused_queue=3112`, `queue_max=384`, `heap_min=29924`. The
+board's messages to the host outrun what its notifications carry, and the 384-entry queue overflows.
+8031 of them were TX_DONE, a diagnostic the host never reads. Over BLE the board sends no TX_DONE and
+the writer gathers frames into one notification while its queue holds more: the next run dropped
+nothing (`queue_max=26`) and the console reached the room at under one frame a second. At a 15 to
+30 ms interval a HELLO round trip took 63 ms; at 15 ms (min = max, the one exception in Apple's
+accessory rules) it takes 32 ms, and a FireRed host trade completed over BLE from a Mac at a pace the
+player called much better, the console leaving cleanly after it.
+
+A FireRed joiner over BLE did not finish its RFU handshake; the console showed 2318-0013. With 27-byte
+link-layer packets the board heard about 217 frames a second and the host received 757 of 6522.
+Data length extension (251-byte packets) doubles the bench from 14.1 to 28.1 KB/s, and the next joiner
+run delivered 776 of 796 RX_ETH, yet the joiner still sent 5 T slots a second against the console's
+30 with its 24-frame window nearly full, and the board refused 581323 messages at the heap floor
+(`heap_min=30296`). The classic ESP32 is a Bluetooth 4.2 part with no 2M PHY.
+
+On a XIAO ESP32C6 (Bluetooth 5) the same build benches 33.6 KB/s with a 62 ms HELLO round trip, and a
+FireRed joiner trade completed over BLE from a Mac: the joiner kept pace with the console (18 T slots a
+second each), slower than over the cable by the player's account. The C6 BLE image fills the 1 MB app
+partition to within 13 KB. The board advertises only its name: the iOS app scans with no service
+filter and matches `POKELDN-RADIO`.
+
+A XIAO ESP32C6 that asked for 15 ms only at connect ran at 30 ms (61.5 ms per HELLO from an iPhone 13
+Pro, a FireRed room at a crawl); asked again once the central subscribes, it gets 15 ms
+(`ble_itvl_us=15000` in STATUS, 32.1 ms per HELLO). A request at connect arrives while the central
+still discovers services.
+
+On macOS, bleak aborts (SIGABRT) in a process whose responsible app has no Bluetooth grant; a script
+started with `open -n -a Terminal FILE.command` runs under Terminal's.
+
 ### The USB host link
 
 The S3, C3 and C6 use the same COBS, CRC and CREDIT protocol over USB Serial/JTAG. Both driver rings are
@@ -720,6 +793,33 @@ The receive interrupt drops a 64-byte packet when the 16 KB RX ring is full and 
 (`usb_serial_jtag.c:144` ignores `xRingbufferSendFromISR`'s result). The CREDIT window keeps the ring
 from filling; a loss there shows only as bytes written past the board's last CREDIT.
 `POKELDN_ESP32_BAUD` is accepted on all targets and only changes the classic ESP32's line rate.
+
+The PC sets a 1 s serial write timeout. A failed or short write ends the session through the same
+board-loss handler as a read error, without counting the failed frame as written. Rate negotiation
+also bounds the wait for the OS output queue instead of calling an unbounded `flush()`.
+After the initial HELLO and rate negotiation, 1 s without a valid board frame queues a STATUS probe;
+3 s of silence ends the session with a USB error and asks the user to unplug and reconnect the board.
+Idle firmware repeats CREDIT, and older firmware that does not repeat it can answer STATUS.
+Malformed bytes do not count as proof of life. A repeating CREDIT can still recover bytes lost on
+the line, but a completely silent board is not repeatedly resynced into accepting more writes.
+
+To reproduce a long upload without a console, run a two-hour host-to-board soak, using the native
+USB port and an empty AP (replace `COM5` with the board's port):
+
+```sh
+./.venv/bin/python tools/ldn/esp32_bench.py --port COM5 --bauds 921600 \
+    --soak 7200 --size 1400 --rate 460000
+```
+
+This sends 1400-byte Ethernet frames with CREDIT flow control, targets 460000 Ethernet bytes/s,
+and prints cumulative frames, bytes, credits and board STATUS every 5 s. The actual rate can be
+lower if the board or host cannot keep up. `--rate 0` removes pacing. Use a single baud for a USB
+soak: native USB ignores the baud value. The final board count includes Wi-Fi transmit failures,
+so it checks delivery to the command handler, not reception over the air. A USB failure or a final
+frame-count mismatch exits nonzero. Keep the terminal output; `POKELDN_ESP32_TRACE` can additionally
+record the wire messages, but an hours-long full-payload trace can be several GB.
+Follow a successful soak with a full console upload lasting beyond the reported 54-minute failure;
+the empty-AP test does not reproduce the console's acknowledgments or all Wi-Fi load.
 
 USB drains faster than the writer encodes, so under a full-rate board-to-host stream the writer
 never sleeps. On USB targets the reader runs at priority 21, above the writer (20); the UART build
@@ -826,9 +926,24 @@ Other boards, with their trades:
 | XIAO ESP32C3 | access point | Sword | trade through the packaged macOS app, legal PK8 |
 | XIAO ESP32C6 (ceramic antenna) | station | FireRed | trade, clean console departure |
 | XIAO ESP32C6 (ceramic antenna) | access point | Sword, Scarlet | trade, valid PK8 records, clean console departure |
+| XIAO ESP32C6 (Android prototype, USB-C) | access point | FireRed | trade, legal received PK3, clean console departure; Android runtime and scheduling measurements below |
 | XIAO ESP32S3 (macOS) | station | FireRed | trade, mutual cancel, clean link close; 5099 of 5099 ETH_TX, no bad wire frame, no USB resync |
 | XIAO ESP32S3 (macOS) | access point | FireRed, Sword | trade, 344-byte PK8, clean console departure; zero lost ETH_TX; the board answers HELLO afterwards |
 | ESP32-S3 (Windows, reported in [PR 2](https://github.com/Decryptu/pokeldn/pull/2)) | station | FireRed | trade |
+
+The [Android developer prototype](../examples/android/README.md) on a OnePlus CPH2621 with Android 16
+powers the XIAO ESP32C6 through USB-C and runs
+the existing Python host with a native USB CDC stream. FireRed trades completed with legal
+received PK3s, save barriers and room departure. The initial host ran about 10 parent slots/s,
+with slow movement and a long animation wait. Running LDN and the game protocol on one Trio
+thread increased the loop rate; restricting the Python threads to one performance core then
+restored smooth room movement. A repeat trade completed normally, with 51.1 unique parent
+UNI slots/s measured across both a 70-second room window and a 30-second animation window.
+The received Pikachu passed PKHeX validation and the console left cleanly.
+In an isolated 300-packet send test on this phone, unrestricted
+warm runs reached 99 and 113 packets/s; core 6 reached 265 and 281 packets/s, and restoring the
+original CPU masks returned the lower rate. This measurement does not establish an affinity
+requirement for other Android devices.
 
 A FireRed console joining the board's access point lists the network (it accepts the zero-length
 hidden SSID, the rate order, capability `0x0431` and the WMM element), authenticates open and sends

@@ -1,5 +1,9 @@
 """poke-app's interface language: Spanish or English. The English text is the key; a string with no
-Spanish entry shows in English. `tr` takes str.format fields: tr("{n} traded", n=3)."""
+Spanish entry shows in English. `tr` takes str.format fields: tr("{n} traded", n=3).
+
+Upstream's own screens look their text up by key, tr("bank.bank_676c47", "Bank") [pokeldn.app.i18n.t], and
+the bundled Spanish language pack answers those (gui/language_pack.py); `tr` with a default does that lookup,
+so poke-app's files can mix both."""
 
 LANGUAGES = (("es", "Español"), ("en", "English"))
 _state = {"code": "es"}
@@ -13,7 +17,10 @@ def language() -> str:
     return _state["code"]
 
 
-def tr(text: str, **fields) -> str:
+def tr(text: str, default: str | None = None, **fields) -> str:
+    if default is not None:
+        from pokeldn.app.i18n import t
+        return t(text, default, **fields)
     if not text:
         return text
     out = ES.get(text, text) if _state["code"] == "es" else text
@@ -381,6 +388,8 @@ ES = {
     "Bank": "Banco",
     "Options": "Opciones",
     "pokeldn · a fork by {name}": "pokeldn · fork de {name}",
+    "Plug your ESP32 into the phone with a USB data cable.":
+        "Conecta tu ESP32 al teléfono con un cable USB de datos.",
 
     # upstream 0.19-0.22 in the HOME screens: the GTS beside the bank, plugins among the options
     "Keep Pokemon on this computer, send them back to a game or trade them on the GTS.":

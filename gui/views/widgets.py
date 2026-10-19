@@ -9,12 +9,11 @@ from typing import Callable
 import flet as ft
 
 from gui import drop, theme as t
-from gui.i18n import tr
+from pokeldn.app.i18n import t as tr
 
 
 class PixelActivity(ft.Container):
-    def __init__(self, label: str = "Loading"):
-        label = tr(label)
+    def __init__(self, label: str = tr('widgets.loading_dc3808', 'Loading')):
         positions = [(6, 0), (12, 0), (12, 6), (12, 12), (6, 12), (0, 12), (0, 6), (0, 0)]
         self._pixels = [ft.Container(width=3, height=3, left=x, top=y, bgcolor=t.BLUE,
                                      opacity=1 if i == 0 else 0.2)
@@ -38,7 +37,13 @@ class PixelActivity(ft.Container):
             phase = (phase + 1) % len(self._pixels)
             for i, pixel in enumerate(self._pixels):
                 pixel.opacity = max(0.18, 1 - ((phase - i) % 8) * 0.22)
-            self.update()
+            try:
+                self.update()
+            except RuntimeError as error:
+                # An async list can replace its loading icon between the wake-up and update.
+                if "must be added to the page" not in str(error):
+                    raise
+                return
 
 
 class Check:
@@ -71,7 +76,7 @@ class CodeBlock:
         self.control = ft.Container(ft.Row([
             ft.Container(content if content is not None else self.text, expand=True,
                          padding=ft.Padding(0, 6, 0, 6)),
-            t.icon_button("copy", self._copy, tr("Copy code")),
+            t.icon_button("copy", self._copy, tr('widgets.copy_code_49a005', 'Copy code')),
         ], spacing=8, vertical_alignment=ft.CrossAxisAlignment.START),
             bgcolor=t.BG, border_radius=10, padding=10)
 
@@ -97,15 +102,70 @@ def fenced_blocks(source: str):
         yield source[cursor:], None
 
 
+HEADING = re.compile(r"(?m)^ {0,3}#{1,6}[ \t]+(.+?)[ \t#]*$")
+EXPLICIT_ANCHOR = re.compile(r'''<a\s+(?:id|name)=["']([^"']+)["']\s*>\s*</a>\s*$''', re.I)
+
+
+def anchor(heading: str) -> str:
+    """Keep kramdown's English IDs and support non-ASCII headings without an English reference."""
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", heading)
+    if not re.search(r"[a-zA-Z]", text) and any(char.isalpha() for char in text):
+        return re.sub(r"[^\w -]", "", text.lower()).strip().replace(" ", "-")
+    text = re.sub(r"^[^a-zA-Z]+", "", text)
+    return re.sub(r"[^a-z0-9 -]", "", text.lower()).replace(" ", "-")
+
+
+def heading_sections(source: str, *, reference: str | None = None):
+    """(anchor, heading, markdown) per heading, outside fenced examples, with the text before the first
+    heading under ('', ''). Repeated anchors take kramdown's -1, -2 suffixes. A translated document
+    with the same heading structure can keep the original document's fragment IDs. An explicit
+    HTML anchor before a heading also preserves IDs when a translation adds or removes sections."""
+    reference_keys = [key for key, title, _ in heading_sections(reference) if title] if reference else []
+    count = sum(len(list(HEADING.finditer(block))) for block, code in fenced_blocks(source) if code is None)
+    if len(reference_keys) != count:
+        reference_keys = []
+    seen: dict[str, int] = {}
+    number = 0
+    current, heading, parts = "", "", []
+    for block, code in fenced_blocks(source):
+        cursor = 0
+        for match in HEADING.finditer(block) if code is None else ():
+            prefix = block[cursor:match.start()]
+            explicit = EXPLICIT_ANCHOR.search(prefix)
+            parts.append(prefix[:explicit.start()] if explicit else prefix)
+            yield current, heading, "".join(parts)
+            heading, base = match[1], anchor(match[1])
+            current = f"{base}-{seen[base]}" if base in seen else base
+            if reference_keys:
+                current = reference_keys[number]
+            elif explicit:
+                current = explicit[1]
+            number += 1
+            seen[base] = seen.get(base, 0) + 1
+            parts, cursor = [], match.start()
+        parts.append(block[cursor:])
+    yield current, heading, "".join(parts)
+
+
 class MarkdownDocument:
     def __init__(self, app, on_link):
         self.app, self.on_link = app, on_link
         self.control = ft.Column(spacing=14, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)
 
-    def set_value(self, value: str) -> None:
-        self.control.controls = [self._markdown(source) if code is None else
-                                 CodeBlock(self.app, code, self._markdown(source)).control
-                                 for source, code in fenced_blocks(value)]
+    def set_value(self, value: str, *, reference: str | None = None) -> None:
+        """Each heading starts its own control keyed by its anchor, so a link or a search result scrolls to it."""
+        controls = []
+        for key, _, section in heading_sections(value, reference=reference):
+            first = True
+            for source, code in fenced_blocks(section):
+                if not source.strip():
+                    continue
+                control = self._markdown(source) if code is None else CodeBlock(self.app, code, self._markdown(source)).control
+                if first and key:
+                    control.key = ft.ScrollKey(key)
+                first = False
+                controls.append(control)
+        self.control.controls = controls
 
     def _markdown(self, value: str) -> ft.Markdown:
         return ft.Markdown(
@@ -140,16 +200,28 @@ def on_ui(page: ft.Page, fn: Callable[[], None]) -> None:
 
 
 class Log:
-    """A monospace log that takes lines from any thread and redraws at most four times a second."""
+    """A monospace log that takes lines from any thread and redraws at most four times a second (once
+    on a phone)."""
 
     MAX = 1500
+    # On a phone the run shares the interface's interpreter, and each redraw diffs every line kept:
+    # an iPhone run fell from 41 to 12 link slots per second (examples/ios/README.md).
+    PHONE = os.environ.get("POKELDN_PLATFORM") in ("android", "ios")
+    if PHONE:
+        MAX = 300
+    FLUSH = 1.0 if PHONE else 0.25
 
-    def __init__(self, page: ft.Page, placeholder: str = ""):
+    def __init__(self, page: ft.Page, placeholder: str = "", private=None):
+        """`private`: a callable that returns the names to mask from the start (the user's trainer), or
+        None while Settings shows full logs; each clear starts a new run's Redactor."""
         self.page = page
+        self.private = private
         self.lines: deque[str] = deque(maxlen=self.MAX)
         self.pending: list[str] = []
         self.lock = threading.Lock()
         self.flush_scheduled = False
+        self.redactor = None
+        self._new_redactor()
         self.list = ft.ListView(expand=True, spacing=1, auto_scroll=True, padding=ft.Padding(12, 10, 12, 10))
         self.placeholder = t.text(placeholder, 12, t.FAINT)
         self.control = ft.Container(ft.Stack([t.fade(self.list, 16), ft.Container(self.placeholder, padding=12)],
@@ -163,15 +235,18 @@ class Log:
         color = t.RED if ("traceback" in lower or "error" in lower or "failed" in lower) else \
             t.GREEN if ("complete" in lower or "success" in lower) else \
             t.INFO if line.startswith("[app]") else t.SOFT
-        return ft.Text(line, size=11, color=color, font_family=t.MONO, selectable=True)
+        from gui.localization import app_log
+        return ft.Text(app_log(line), size=11, color=color, font_family=t.MONO, selectable=True)
 
     def add(self, line: str) -> None:
+        if self.redactor is not None:
+            line = self.redactor(line)
         with self.lock:
             self.pending.append(line)
             if self.flush_scheduled:
                 return
             self.flush_scheduled = True
-        threading.Timer(0.25, lambda: on_ui(self.page, self._flush)).start()
+        threading.Timer(self.FLUSH, lambda: on_ui(self.page, self._flush)).start()
 
     def _flush(self) -> None:
         with self.lock:
@@ -183,7 +258,13 @@ class Log:
         self.list.update()
         self.placeholder.update()
 
+    def _new_redactor(self) -> None:
+        from pokeldn.app.redact import Redactor
+        names = self.private() if self.private else None
+        self.redactor = Redactor(names) if names is not None else None
+
     def clear(self) -> None:
+        self._new_redactor()
         self.lines.clear()
         self.list.controls = []
         self.placeholder.visible = True
@@ -207,7 +288,7 @@ class PathField:
         self.field = t.field(value=value, mono=True, expand=True,
                              on_change=lambda e: self._changed(e.control.value), **options)
         icon = "folder" if mode == "dir" else "file"
-        row = ft.Row([self.field, t.icon_button(icon, self._browse, tr("Browse"))], spacing=6,
+        row = ft.Row([self.field, t.icon_button(icon, self._browse, tr('widgets.browse_3227aa', 'Browse'))], spacing=6,
                      vertical_alignment=ft.CrossAxisAlignment.CENTER)
         self.control = (drop.target(ft.Container(row, border_radius=t.CONTROL_RADIUS), self._dropped)
                         if droppable else row)
@@ -229,9 +310,11 @@ class PathField:
         start = os.path.expanduser(self.start_dir())
         start = start if os.path.isdir(start) else None
         if self.mode == "dir":
-            path = await self.picker.get_directory_path(initial_directory=start)
+            path = await self.picker.get_directory_path(
+                dialog_title=tr("widgets.choose_folder", "Choose folder"), initial_directory=start)
         else:
             files = await self.picker.pick_files(
+                dialog_title=tr("widgets.choose_file", "Choose file"),
                 initial_directory=start, allowed_extensions=list(self.exts) or None,
                 file_type=ft.FilePickerFileType.CUSTOM if self.exts else ft.FilePickerFileType.ANY)
             path = files[0].path if files else None
@@ -248,6 +331,10 @@ def open_folder(path: str) -> None:
     import subprocess
     import sys
     os.makedirs(path, exist_ok=True)
+    from pokeldn.app import android
+    if android.active():   # no file manager to show it in: the folder goes, zipped, where the player saves it
+        android.save_folder(path)
+        return
     if sys.platform == "win32":
         os.startfile(path)
     else:
@@ -259,7 +346,7 @@ class DigitCode:
     box clears the previous one (page_key), a pasted code fills from the box it lands in. The value
     keeps a cleared box as a space; command.code_error refuses anything but the full code."""
 
-    focused: "DigitCode | None" = None     # the code whose box has the focus; page key events go to it
+    focused: 'DigitCode | None' = None     # the code whose box has the focus; page key events go to it
 
     def __init__(self, value: str, on_change: Callable[[str], None], length: int = 8):
         self.on_change, self.length = on_change, length

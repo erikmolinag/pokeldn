@@ -1,10 +1,11 @@
-name: poke-app (Windows)
+name: poke-app (Windows and Android)
 
-# The Pokemon-styled FireRed/LeafGreen edition of the desktop app, built for Windows from the poke-app
-# branch. It runs by hand (Actions, poke-app (Windows), Run workflow) and on pushes to poke-app that touch
-# the app. The radio firmware is unchanged from upstream, so the images come from Decryptu/pokeldn's
-# release (radio and controller images) instead of six ESP-IDF builds, and so does the Flet client (see its
-# step). The zip is a workflow artifact; nothing is published.
+# The Pokemon-styled FireRed/LeafGreen edition of the app, built from the poke-app branch for Windows and
+# for Android (examples/android/README.md; poke-app's Android app also drives a classic ESP32 through its
+# CP210x chip). It runs by hand (Actions, poke-app, Run workflow) and on pushes to poke-app that touch the
+# app. The radio firmware is unchanged from upstream, so the images come from Decryptu/pokeldn's release
+# instead of eight ESP-IDF builds, and so does the Windows Flet client (see its step). The builds are
+# workflow artifacts; nothing is published.
 on:
   workflow_dispatch:
   push:
@@ -15,6 +16,7 @@ on:
       - "bin/**"
       - "services/pkhex/**"
       - "scripts/**"
+      - "examples/android/**"
       - "requirements.txt"
       - ".github/workflows/poke-app.yml"
 
@@ -22,7 +24,7 @@ permissions:
   contents: read
 
 env:
-  UPSTREAM_RELEASE: v0.22.2   # the upstream release merged in: its firmware images and its Flet client
+  UPSTREAM_RELEASE: v0.32.0   # the upstream release merged in: its firmware images and its Flet client
 
 jobs:
   windows:
@@ -85,4 +87,75 @@ jobs:
         with:
           name: pokeldn-pokemon-windows-x64
           path: pokeldn-pokemon-windows-x64.zip
+          retention-days: 30
+
+  # The Android app as upstream's release builds it (.github/workflows/release.yml, android). Without the
+  # ANDROID_RELEASE_* secrets it signs with the runner's debug key, so a newer build only installs after
+  # the older one is uninstalled.
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            gui/requirements.txt
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: "10.0.x"
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      # AGP 8.13 runs on Gradle 8.13 to 9.5 (examples/android/build.py).
+      - uses: gradle/actions/setup-gradle@v5
+        with:
+          gradle-version: "9.5.1"
+      - name: Radio firmware from the upstream release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p gui/firmware
+          gh release download "$UPSTREAM_RELEASE" -R Decryptu/pokeldn -p "pokeldn-*.bin" -D gui/firmware
+          ls -la gui/firmware
+      - name: Install
+        run: python -m pip install -r gui/requirements.txt
+      # build_native.py compiles the Unicorn source this fetches.
+      - name: Fetch the Unicorn source
+        run: python scripts/build_unicorn.py
+      - name: The release key
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_RELEASE_KEYSTORE }}
+        if: env.KEYSTORE != ''
+        run: |
+          echo "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "POKELDN_ANDROID_RELEASE_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+      - name: Java tests
+        working-directory: examples/android
+        run: |
+          mkdir -p "$RUNNER_TEMP/junit"
+          curl -sSfL -o "$RUNNER_TEMP/junit/junit.jar" https://repo1.maven.org/maven2/junit/junit/4.13.2/junit-4.13.2.jar
+          curl -sSfL -o "$RUNNER_TEMP/junit/hamcrest.jar" https://repo1.maven.org/maven2/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar
+          CP="$RUNNER_TEMP/junit/junit.jar:$RUNNER_TEMP/junit/hamcrest.jar"
+          mkdir -p "$RUNNER_TEMP/classes"
+          javac -d "$RUNNER_TEMP/classes" -cp "$CP" src/java/org/pokeldn/usbprobe/Setup.java \
+            test/java/org/pokeldn/usbprobe/SetupTest.java
+          java -cp "$RUNNER_TEMP/classes:$CP" org.junit.runner.JUnitCore org.pokeldn.usbprobe.SetupTest
+      - name: Build
+        env:
+          GRADLE: gradle
+          POKELDN_ANDROID_RELEASE_PASSWORD: ${{ secrets.ANDROID_RELEASE_PASSWORD }}
+          POKELDN_ANDROID_VERSION_CODE: ${{ github.run_number }}
+          POKELDN_ANDROID_VERSION_NAME: poke-app-${{ github.run_number }}
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          python examples/android/build.py --release
+          cp examples/android/build/outputs/apk/release/pokeldn-release.apk pokeldn-pokemon-android-arm64.apk
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pokeldn-pokemon-android-arm64
+          path: pokeldn-pokemon-android-arm64.apk
           retention-days: 30

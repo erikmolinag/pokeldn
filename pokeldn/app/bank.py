@@ -15,7 +15,8 @@ from pokeldn.app.paths import BANK
 from pokeldn.pokemon import EXTENSIONS
 
 FILES = re.compile(r"\.(pk3|pb7|pk8|pb8|pa8|pk9|pa9)$", re.IGNORECASE)
-GAME_OF = {extension: game for game, extension in EXTENSIONS.items()}
+# A .pk3 is FireRed's: Ruby, Sapphire and Emerald share the format and come after it.
+GAME_OF = {extension: game for game, extension in reversed(EXTENSIONS.items())}
 
 
 @dataclass(frozen=True)
@@ -128,6 +129,8 @@ def _keep(game: str, content: bytes, info: dict, folder: Path, origin: str, bank
         return None
     banked.add(digest)
     from pokeldn.pokemon import summary
+    # Display-service replies also enter here when a trade's received file is banked.
+    info = {**info, **info.get("canonical", {})}
     folder.mkdir(parents=True, exist_ok=True)
     name = re.sub(r"[^A-Za-z0-9]+", "", str(info.get("species", ""))) or "pokemon"
     stem = f"{name}-{time.strftime('%Y%m%d-%H%M%S')}-{random.getrandbits(32):08x}"
@@ -231,12 +234,18 @@ def edit(entry: Entry, fields: dict) -> Entry:
 
 def remove(entry_id: str, folder=None) -> None:
     folder = Path(folder or BANK)
-    for path in folder.glob(f"{entry_id}.*") if folder.is_dir() else ():
-        if FILES.search(path.name) or path.suffix == ".json":
+    for path in folder.iterdir() if folder.is_dir() else ():
+        if path.stem == entry_id and (FILES.search(path.name) or path.suffix == ".json"):
             path.unlink(missing_ok=True)
 
 
 # The offer queues
+
+def destinations(entry: Entry, trainer: dict, *, service=None) -> dict[str, dict]:
+    """Each game -> {ok, reason, home_tracker}, using the same conversion rules as offer."""
+    from pokeldn.pokemon import SERVICE
+    return (service or SERVICE).destinations(entry.game, data(entry), entry.tracker, trainer)
+
 
 def offer(entry: Entry, game: str, trainer: dict) -> dict:
     """The queue item that trades this banked Pokemon into `game`: moved there by PKHeX's HOME conversion
@@ -246,6 +255,31 @@ def offer(entry: Entry, game: str, trainer: dict) -> dict:
     return {"file": SERVICE.keep(game, reply), "summary": summary(reply), "species": reply["species_id"],
             "shiny": reply["shiny"], "legal": reply["legal"], "encounter": reply["encounter"],
             "moves": reply["moves"], "report": "", "home_tracker": reply["home_tracker"], "bank": entry.id}
+
+
+class TradeSession:
+    """Snapshot the ordered offers for one run; only confirmed trades remove their bank entries."""
+
+    def __init__(self, offers: list[dict], folder=None):
+        self._ids = tuple(item.get("bank", "") for item in offers)
+        self._folder = Path(folder or BANK)
+        self._completed = 0
+
+    @property
+    def completed(self) -> int:
+        return self._completed
+
+    def advance(self, count: int) -> int:
+        """Apply a cumulative completed-trade count; repeats are harmless, invalid counts raise ValueError."""
+        if type(count) is not int or count < 0:
+            raise ValueError("Completed trades must be a nonnegative integer.")
+        while self._completed < min(count, len(self._ids)):
+            entry_id = self._ids[self._completed]
+            if entry_id:
+                remove(entry_id, folder=self._folder)
+            self._completed += 1
+        self._completed = max(self._completed, count)
+        return self._completed
 
 
 def queued(settings, entry_id: str) -> list[str]:

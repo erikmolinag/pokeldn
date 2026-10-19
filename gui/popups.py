@@ -3,7 +3,7 @@
 import flet as ft
 
 from gui import theme as t
-from gui.i18n import tr
+from gui.localization import translate
 
 TONES = {"info": ("circle-info", t.BLUE), "warning": ("warning-diamond", t.AMBER),
          "error": ("warning-diamond", t.RED)}
@@ -53,23 +53,23 @@ class Dialogs:
         return dialog
 
     def _fill(self, dialog: ft.AlertDialog, entry) -> None:
-        # poke-app: a pop-up's words go through tr() as it shows, so a program's fixed English ones show in
-        # Spanish too; text with no Spanish entry, or already translated, shows as it came.
         self.shown[entry] = dialog
         icon, color = TONES[entry.tone]
-        title = tr(entry.title)
-        header = [t.text(title, 17, weight=ft.FontWeight.W_600)]
+        header = [t.text(translate(entry.title), 17, weight=ft.FontWeight.W_600)]
         if entry.source:
-            header.insert(0, t.text(tr(entry.source), 12, t.FAINT))
-        dialog.semantics_label = title
+            header.insert(0, t.text(translate(entry.source), 12, t.FAINT))
+        dialog.semantics_label = translate(entry.title)
         dialog.title = ft.Row([t.pixel_icon(icon, color=color),
                                ft.Column(header, spacing=2, tight=True, expand=True)], spacing=10)
-        dialog.content = (ft.Container(t.text(tr(entry.text), 13, t.MUTED, selectable=True), width=460)
-                          if entry.text else None)
-
         def press(answer):
             return lambda e: entry.press(answer)
+        body = [t.text(translate(entry.text), 13, t.MUTED, selectable=True)] if entry.text else []
+        # A choice's options weigh the same: one unfilled button each, full width, in the program's order.
+        body += [t.secondary_button(translate(option), press(str(i))) for i, option in enumerate(entry.options)]
+        if len(body) > 1:
+            body = [ft.Column(body, spacing=8, tight=True, horizontal_alignment=ft.CrossAxisAlignment.STRETCH)]
+        dialog.content = ft.Container(body[0], width=460) if body else None
         # Esc and a click outside answer Dismiss; a button for it would sit beside disagree.
-        dialog.actions = ([t.button(tr(entry.label), press("ack"))] if entry.kind == "ack" else
-                          [t.secondary_button(tr(entry.disagree), press("disagree")),
-                           t.button(tr(entry.agree), press("agree"))])
+        dialog.actions = ([t.button(translate(entry.label), press("ack"))] if entry.kind == "ack" else
+                          [t.secondary_button(translate(entry.disagree), press("disagree")),
+                           t.button(translate(entry.agree), press("agree"))] if entry.kind == "confirm" else [])
