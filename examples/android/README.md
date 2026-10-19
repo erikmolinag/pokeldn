@@ -1,5 +1,12 @@
 # Android app
 
+poke-app (this fork) also drives a classic ESP32 through a Silicon Labs CP210x bridge (`10c4:ea60`, as on
+ELEGOO's boards): `UsbStream` sends the CP210x vendor requests of Silicon Labs AN571 (enable, 8N1, baud
+rate, DTR/RTS through SET_MHS) to the bridge's one interface, and `pokeldn.app.android` names the port
+by the bridge's ids, so the Board page, esptool's classic reset and the radio treat it as a desktop does.
+CH34x and FTDI boards still need a computer. The fork's app installs as `org.pokeldn.pokeapp`, beside
+upstream's.
+
 The Android app runs the desktop app's own interface on a phone, with an ESP32-S3, C3 or C6 radio
 board on the phone's USB port. Every page, game and tool is the code in `gui/` and `pokeldn/`;
 only the shell in this folder is Android's. A OnePlus CPH2621 running Android 16 completed a
