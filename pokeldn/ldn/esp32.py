@@ -6,6 +6,7 @@ the message set is `firmware/esp32/main/radio.c`, documented in docs/hardware_es
 from pokeldn.host_support import open_output
 import collections
 import os
+import re
 import struct
 import threading
 import time
@@ -33,6 +34,9 @@ CMD_DISPLAY = 0x0E
 CMD_ALIVE = 0x0F
 ALIVE_FIRMWARE = (1, 4, 0)
 ALIVE_EVERY = 1.0
+WRITE_TIMEOUT = 1.0
+LINK_PROBE_AFTER = 1.0
+LINK_SILENCE = 3.0
 # The run rates the app's Settings offer (gui/views/settings.py); open_serial looks for a board
 # left at any of them.
 RUN_BAUDS = (921600, 1500000)
@@ -90,7 +94,7 @@ MSG_TX_DONE = 0x8D
 # reports CREDIT the host keeps under FLOW_WINDOW bytes in flight. docs/hardware_esp32.md.
 FLOW_WINDOW = 8192
 # The window stays shut: a board repeating one count past FLOW_STALL is idle and the rest was lost
-# on the line; a silent one is busy (a reader holds up to 0.7 s) and gets FLOW_BLIND.
+# on the line. Wait up to FLOW_BLIND for a busy reader; silence after that ends the link.
 FLOW_STALL = 0.3
 FLOW_BLIND = 5.0
 QUEUE_LIMIT = 512  # ETH_TX and RAW_TX beyond it are dropped here
@@ -110,21 +114,14 @@ LINK_KEY_FAILED = 0xFFFE
 
 
 def cobs_encode(data: bytes) -> bytes:
-    out = bytearray([0])
-    code_at, code = 0, 1
-    for b in data:
-        if b == 0:
-            out[code_at] = code
-            code_at, code = len(out), 1
-            out.append(0)
-            continue
-        out.append(b)
-        code += 1
-        if code == 255:
-            out[code_at] = code
-            code_at, code = len(out), 1
-            out.append(0)
-    out[code_at] = code
+    out = bytearray()
+    for block in data.split(b"\x00"):
+        while len(block) >= 254:
+            out.append(255)
+            out += block[:254]
+            block = block[254:]
+        out.append(len(block) + 1)
+        out += block
     return bytes(out)
 
 
@@ -166,16 +163,18 @@ class FrameReader:
         self.rejected = 0
 
     def feed(self, data: bytes):
-        for b in data:
-            if b:
-                self._buffer.append(b)
-                continue
-            if self._buffer:
+        if 0 not in data:
+            self._buffer += data
+            return
+        frames = bytes(data).split(b"\x00")
+        frames[0] = bytes(self._buffer) + frames[0]
+        self._buffer = bytearray(frames.pop())
+        for frame in frames:
+            if frame:
                 try:
-                    yield decode_frame(bytes(self._buffer))
+                    yield decode_frame(frame)
                 except ValueError:
                     self.rejected += 1
-                self._buffer.clear()
 
 
 def mac_bytes(mac) -> bytes:
@@ -289,8 +288,12 @@ class Radio:
     def __init__(self, stream, log=None, on_lost=None):
         self._stream = stream
         self._log = log
-        self._on_lost = on_lost   # called once, from the reader thread, when the port dies
+        self._on_lost = on_lost   # called once, from the reader or writer thread, on link failure
         self.lost = None
+        self._state_lock = threading.Lock()
+        self._seen_at = time.monotonic()
+        self._monitor_link = False   # enabled after open_serial finishes negotiating the rate
+        self._probing = False
         self.info: Info | None = None
         self._write_lock = threading.Lock()
         self._request_lock = threading.Lock()
@@ -303,10 +306,12 @@ class Radio:
         self._out: collections.deque = collections.deque()
         self._out_cv = threading.Condition()
         self._written = self._credited = 0
+        self._sending = 0  # the frame on the line; the board credits it before the write returns
         self._credit_seen = 0.0
         self._lost = 0  # bytes a resync wrote off; the board's count stays behind by them
         self._flow = False
         self.tx_dropped = self.flow_resyncs = 0
+        self._usbwatch_seen: set[bytes] = set()
         # POKELDN_ESP32_TRACE=FILE records every message both ways: time, direction, type, hex.
         trace = os.environ.get("POKELDN_ESP32_TRACE")
         self._trace = open_output(trace, "a", buffering=1) if trace else None
@@ -321,18 +326,30 @@ class Radio:
         """`fast_baud` defaults to POKELDN_ESP32_BAUD, else 921600; 0 keeps the rate the board
         answers at. `left_at`: more rates an earlier process may have left the board at.
         `radio.info` is the board's HELLO reply."""
-        import serial
         run_baud = int(os.environ.get("POKELDN_ESP32_BAUD", "921600"))
         if fast_baud is None:
             fast_baud = run_baud
-        s = serial.Serial()
-        s.port = port
-        s.baudrate = baud
-        s.timeout = 0.02
-        # Most ESP32 boards reset on a DTR/RTS edge; keep both released so opening does not.
-        s.dtr = False
-        s.rts = False
-        s.open()
+        if port == "ble" or port.startswith("ble:"):
+            # Bluetooth LE has no line rate: the board's BAUD would be acknowledged and ignored.
+            from pokeldn.ldn import esp32_ble
+            s = esp32_ble.BleStream(port[4:] or esp32_ble.NAME)
+            fast_baud, left_at = 0, ()
+        elif port.startswith("socket://"):
+            # The iOS app's Bluetooth bridge (examples/ios): a byte stream with no line rate.
+            import serial
+            s = serial.serial_for_url(port, timeout=0.02, write_timeout=WRITE_TIMEOUT)
+            fast_baud, left_at = 0, ()
+        else:
+            import serial
+            s = serial.Serial()
+            s.port = port
+            s.baudrate = baud
+            s.timeout = 0.02
+            s.write_timeout = WRITE_TIMEOUT
+            # Most ESP32 boards reset on a DTR/RTS edge; keep both released so opening does not.
+            s.dtr = False
+            s.rts = False
+            s.open()
         radio = cls(s, log=log, on_lost=on_lost)
         # Windows opens a COM port exclusively: a handle left open here refuses the retry
         # (PermissionError 13, Access is denied).
@@ -344,9 +361,7 @@ class Radio:
                 log(f"[esp32] the board answered at {s.baudrate} baud")
             if fast_baud and fast_baud != s.baudrate:
                 radio.request(CMD_BAUD, struct.pack("<I", fast_baud), MSG_RESULT)
-                radio.drain()
-                s.flush()
-                s.baudrate = fast_baud
+                radio._set_rate(fast_baud)
                 # A HELLO that reaches the board while it is still switching is lost (one open in four
                 # at 1500000), so retry it as the first one is.
                 for attempt in range(5):
@@ -362,6 +377,8 @@ class Radio:
             radio.close()
             raise
         radio.info = info
+        radio._seen_at = time.monotonic()
+        radio._monitor_link = True
         if firmware_version(info) >= ALIVE_FIRMWARE:
             threading.Thread(target=radio._keep_alive, name="esp32-alive", daemon=True).start()
         if radio._trace:
@@ -376,14 +393,24 @@ class Radio:
         for attempt in range(5):
             for rate in rates:
                 if self._stream.baudrate != rate:
-                    self.drain()
-                    self._stream.flush()
-                    self._stream.baudrate = rate
+                    self._set_rate(rate)
                 try:
                     return Info.parse(self.request(CMD_HELLO, b"", MSG_INFO, timeout=0.5))
                 except RadioError:
                     if self.lost is not None or (attempt == 4 and rate == rates[-1]):
                         raise
+
+    def _set_rate(self, rate: int) -> None:
+        if not self.drain():
+            raise RadioError(f"USB output did not drain: {self.lost or 'timed out'}")
+        # Serial.flush() has no timeout, even with write_timeout set. Wait for the driver's
+        # output queue explicitly so a silent but still enumerated device cannot hang rate search.
+        deadline = time.monotonic() + WRITE_TIMEOUT
+        while getattr(self._stream, "out_waiting", 0):
+            if self._closed or time.monotonic() >= deadline:
+                raise RadioError(f"USB output did not drain: {self.lost or 'timed out'}")
+            time.sleep(0.01)
+        self._stream.baudrate = rate
 
     def _keep_alive(self) -> None:
         while not self._closed:
@@ -402,7 +429,8 @@ class Radio:
                 return
 
     def close(self) -> None:
-        self._closed = True
+        with self._state_lock:
+            self._closed = True
         with self._out_cv:
             self._out_cv.notify_all()
         self._writer.join(timeout=1)
@@ -431,6 +459,8 @@ class Radio:
             # decoder; the firmware skips an empty frame (wire.c reader).
             frame = b"\x00" + frame
         with self._out_cv:
+            if self._closed:
+                return
             if len(self._out) >= QUEUE_LIMIT and msg_type in (CMD_ETH_TX, CMD_RAW_TX):
                 self.tx_dropped += 1
                 return
@@ -445,12 +475,13 @@ class Radio:
                 if left <= 0 or self._closed:
                     return False
                 self._out_cv.wait(left)
-        return True
+        return not self._closed
 
     _writing = False
 
     def _write_loop(self) -> None:
         while True:
+            silent = False
             with self._out_cv:
                 while not self._out and not self._closed:
                     self._out_cv.wait()
@@ -468,23 +499,39 @@ class Radio:
                         last, since = self._credited, time.monotonic()
                     elif ((quiet > FLOW_STALL and self._credit_seen > since + FLOW_STALL * 2 / 3)
                           or quiet > FLOW_BLIND):
+                        if time.monotonic() - self._seen_at > FLOW_BLIND:
+                            silent = True
+                            break
                         # Bytes the board never counted (lost on the line) would hold the window
                         # shut for good.
                         self.flow_resyncs += 1
-                        self._record("!", MSG_CREDIT, struct.pack("<II", self._written, self._credited))
+                        self._record("!", MSG_CREDIT, struct.pack("<II", self._written & 0xFFFFFFFF,
+                                                                  self._credited & 0xFFFFFFFF))
                         self._lost += self._written - self._credited
                         self._credited = self._written
                         break
                     self._out_cv.wait(0.05)
+                if self._closed:
+                    self._writing = False
+                    self._out_cv.notify_all()
+                    return
+                self._sending = len(frame)
+            if silent:
+                self._lose(RadioError("The board stopped answering over USB"))
+                return
             self._record(">", msg_type, payload)
             try:
                 with self._write_lock:
-                    self._stream.write(frame)
+                    written = self._stream.write(frame)
+                    # In-process streams may return None; pyserial returns the number written.
+                    if written is not None and written != len(frame):
+                        raise RadioError(f"short USB write: {written} of {len(frame)} bytes")
             except Exception as e:
-                if self._log:
-                    self._log(f"[esp32] write failed: {e}")
+                self._lose(e)
+                return
             with self._out_cv:
                 self._written += len(frame)
+                self._sending = 0
                 if msg_type == CMD_HELLO:
                     # The board restarts its count after a HELLO's delimiter and answers CREDIT 0
                     # (firmware wire_credit_reset); the window stays shut across it.
@@ -500,8 +547,11 @@ class Radio:
 
     def _request(self, msg_type: int, payload: bytes, reply_type: int, timeout: float) -> bytes:
         with self._reply_cv:
+            if self.lost is not None:
+                raise RadioError(f"the board left USB: {self.lost}")
             self._replies[reply_type] = []
         self.send(msg_type, payload)
+        deadline = time.monotonic() + timeout
         with self._reply_cv:
             while True:
                 pending = self._replies.get(reply_type, [])
@@ -518,32 +568,45 @@ class Radio:
                         raise RadioError(f"command 0x{msg_type:02x} failed: {code:#x}")
                     return reply
                 if self.lost is not None:
+                    self._replies.pop(reply_type, None)
                     raise RadioError(f"the board left USB: {self.lost}")
-                if not self._reply_cv.wait(timeout):
+                left = deadline - time.monotonic()
+                if left <= 0 or not self._reply_cv.wait(left):
                     self._replies.pop(reply_type, None)
                     raise RadioError(f"no reply 0x{reply_type:02x} to command 0x{msg_type:02x}")
 
     def _read_loop(self) -> None:
         while not self._closed:
             try:
-                data = self._stream.read(4096)
+                # pyserial's read(n) waits for n bytes or the timeout (31.25 ms on Windows).
+                data = self._stream.read(getattr(self._stream, "in_waiting", 4096) or 1)
             except Exception as e:
                 if not self._closed:
                     self._lose(e)
                 return
-            if not data:
-                continue
             for msg_type, payload in self._reader.feed(data):
                 self._dispatch(msg_type, payload)
+            if self._monitor_link and not self._closed:
+                quiet = time.monotonic() - self._seen_at
+                if quiet > LINK_SILENCE:
+                    self._lose(RadioError("The board stopped answering over USB"))
+                    return
+                if quiet > LINK_PROBE_AFTER and not self._probing:
+                    self._probing = True
+                    self.send(CMD_STATUS)
 
     def _lose(self, error: Exception) -> None:
-        # A removed USB device fails the read (Windows: PermissionError 13, Access is denied); every
-        # later write fails too, so the writer stops and waiting requests fail at once.
-        self.lost = error
+        # Read, write and liveness failures share one transition and notify the run once.
+        with self._state_lock:
+            if self._closed:
+                return
+            self.lost = error
+            self._closed = True
         if self._log:
-            self._log(f"[esp32] read failed: {error}")
-        self._closed = True
+            self._log(f"[esp32] USB link failed: {error}")
         with self._out_cv:
+            self._out.clear()
+            self._writing = False
             self._out_cv.notify_all()
         with self._reply_cv:
             self._reply_cv.notify_all()
@@ -555,21 +618,27 @@ class Radio:
             self._trace.write(f"{time.time():.6f} {direction} {msg_type:02x} {payload.hex()}\n")
 
     def _dispatch(self, msg_type: int, payload: bytes) -> None:
+        self._seen_at = time.monotonic()
+        self._probing = False
         if msg_type == MSG_CREDIT and len(payload) == 4:
             credit = struct.unpack("<I", payload)[0]
             self._record("<", msg_type, payload)
             with self._out_cv:
+                # A CREDIT may count part of the frame still on the line (docs/hardware_esp32.md).
+                sent = self._written + self._sending
+                # The board counts in a u32 (wire.c s_consumed): one update stream passes 4 GiB.
+                credit += max(0, sent - credit) >> 32 << 32
                 self._credit_seen = time.monotonic()
                 # More than was written since the HELLO is a count from before it. A count past
                 # what the written-off bytes allow means a resync wrote off bytes the board had.
-                if credit <= self._written:
-                    self._lost = min(self._lost, self._written - credit)
+                if credit <= sent:
+                    self._lost = min(self._lost, sent - credit)
                     self._credited = max(self._credited, credit + self._lost)
                     self._flow = True
                     self._out_cv.notify_all()
             return
         self._record("<", msg_type, payload)
-        if msg_type == MSG_LOG and self._log:
+        if msg_type == MSG_LOG and self._log and not self._repeated(payload):
             self._log(f"[esp32] {payload.decode(errors='replace')}")
         if msg_type == MSG_BUTTON and len(payload) == 6 and self._log:
             self._log(f"[esp32] BOOT button, mark {struct.unpack_from('<H', payload, 4)[0]}")
@@ -581,6 +650,17 @@ class Radio:
             subscribers = list(self._subscribers)
         for callback in subscribers:
             callback(msg_type, payload)
+
+    def _repeated(self, line: bytes) -> bool:
+        """True for a usbwatch report line this link already logged: every HELLO repeats it."""
+        if not line.startswith(b"usbwatch:"):
+            return False
+        # "reset reason N, up T ms" carries the uptime at this HELLO: the same reset each time.
+        key = re.sub(rb", up \d+ ms$", b"", line)
+        if key in self._usbwatch_seen:
+            return True
+        self._usbwatch_seen.add(key)
+        return False
 
     def hello(self) -> Info:
         info = Info.parse(self.request(CMD_HELLO, b"", MSG_INFO))

@@ -9,6 +9,7 @@ pytest.importorskip("flet")
 import flet as ft
 
 from gui import theme as t
+from gui.localization import SERVICE as DISPLAY_SERVICE
 from gui.views import pokemon
 from gui.views.games import GamesView
 from gui.views.pokemon import OfferOptions, OfferQueue
@@ -29,14 +30,17 @@ def test_choice_card_includes_help_for_the_saved_selection():
 
 
 def test_options_the_new_species_cannot_have_are_dropped_before_a_build():
+    shown = []
     picker = SimpleNamespace(value={"species": 132, "options": {"ability": 31, "ball": 2, "gender": 1,
-                                                                 "held_item": 236, "nature": 3, "form": 2}})
+                                                                 "held_item": 236, "nature": 3, "form": 2}},
+                             show_sprite=lambda: shown.append(dict(picker.value["options"])))
     options = OfferOptions(picker)
     options._form({"natures": [], "abilities": [{"id": 7, "name": "Limber"}], "gendered": False,
                    "forms": [{"id": 0, "name": ""}], "move_names": [],
                    "balls": [{"id": 2, "name": "Ultra Ball"}], "held": [{"id": 236, "name": "Light Ball"}],
                    "effort": {"kind": "evs", "max": 252, "total": 510}})
     assert picker.value["options"] == {"ball": 2, "held_item": 236, "nature": 3}
+    assert shown == [picker.value["options"]]
 
 
 FOUND = {"natures": [], "abilities": [], "gendered": True, "balls": [], "held": [], "forms": [], "move_names": []}
@@ -359,11 +363,13 @@ def test_the_released_firmware_lands_only_when_every_image_matches_its_checksum(
         server.server_close()
 
 
-def test_a_pokemon_file_shows_its_own_species_and_shininess(monkeypatch):
+@pytest.mark.parametrize("form", [0, 1])
+def test_a_pokemon_file_shows_its_own_species_and_shininess(monkeypatch, form):
     import asyncio
-    monkeypatch.setattr(pokemon.builder.SERVICE, "species", lambda game: [{"id": 25, "name": "Pikachu"}])
-    monkeypatch.setattr(pokemon.builder.SERVICE, "import_file", lambda game, path: {
-        "file": path, "species": "Charizard", "species_id": 6, "level": 50, "shiny": True, "legal": True,
+    monkeypatch.setattr(pokemon.SERVICE, "species", lambda game: [{"id": 25, "name": "Pikachu"}])
+    monkeypatch.setattr(pokemon.SERVICE, "import_file", lambda game, path: {
+        "file": path, "species": "Charizard", "species_id": 6, "form_id": form,
+        "level": 50, "shiny": True, "legal": True,
         "encounter": "", "moves": [], "report": ""})
 
     async def pick_files(**_):
@@ -375,9 +381,10 @@ def test_a_pokemon_file_shows_its_own_species_and_shininess(monkeypatch):
     picker.species.options = [object()]
     picker.control = SimpleNamespace(update=lambda: None)
     shown = []
-    picker.sprite.show = lambda species, shiny, update=True: shown.append((species, shiny))
+    picker.sprite.show = lambda species, shiny, update=True, form=0: shown.append((species, shiny, form))
     asyncio.run(picker._use_file(None))
-    assert shown == [(6, True)]
+    assert shown == [(6, True, form)]
+    assert picker.options.label.value == "1 set"
     assert (saved[-1]["species"], saved[-1]["shiny"], picker.species.value, picker.shiny.value) == (6, True, "6", True)
 
 
@@ -389,6 +396,11 @@ def test_the_gift_builder_renders_every_mode_and_kind_and_exports_what_it_shows(
     from gui.views import gifts as view_module
     if not assembler:
         monkeypatch.setattr(view_module.custom_code, "toolchain", lambda: None)
+    import time
+    from types import SimpleNamespace
+    from pokeldn.swsh import wc8
+    # A WC8 carries the second it was built; the export and the recompile below may straddle one.
+    monkeypatch.setattr(wc8, "time", SimpleNamespace(time=lambda: 1_700_000_000.0, gmtime=time.gmtime))
     from pokeldn import gifts
     from pokeldn.app import gift_builder
     from pokeldn.app.catalog import GAMES
@@ -507,7 +519,7 @@ def test_start_on_another_tool_stops_the_running_session_then_starts(tmp_path, m
     monkeypatch.setattr(SessionPanel, "_tick", lambda self: None)
     first, second = (next(t for t in TOOLS if t.key == key) for key in ("swsh-join", "pla-host"))
     panel = SessionPanel.__new__(SessionPanel)
-    panel.__dict__.update(app=FakeApp(), games=SimpleNamespace(values={}, extra={}, visible=False, game=SimpleNamespace(
+    panel.__dict__.update(app=FakeApp(), games=SimpleNamespace(values={}, extra={}, visible=False, show_run_cards=lambda: None, panes=SimpleNamespace(show=lambda *a, **k: None), game=SimpleNamespace(
         name="game", key="swsh")), log=SimpleNamespace(add=lambda line: None, clear=lambda: None),
         received=SimpleNamespace(), transfer=SimpleNamespace(), partner=SimpleNamespace(), run=None,
         running_tool=None, restart=False, stopping=False, traded=0)
@@ -554,6 +566,79 @@ def test_a_pop_up_is_a_dialog_naming_its_program_with_the_callers_buttons(monkey
     note.on_dismiss(None)                       # Flet reports the close the manager made: nothing more
     ask.on_dismiss(None)                        # Esc, or a click outside
     assert answers[1:] == [{"id": "ask", "n": 1, "answer": "dismiss"}]
+
+
+def test_a_choice_is_a_dialog_with_one_button_per_option_and_no_actions(monkeypatch):
+    page, manager, run, answers = popup_page(monkeypatch)
+    run.take({"op": "open", "id": "update", "n": 1, "kind": "choose", "title": "Update found",
+              "text": "Version 1.1.0 is installed.", "options": ["Save it", "Send 1.2.0", "Leave"], "tone": "info"})
+    (dialog,) = page._dialogs.controls
+    text, *buttons = dialog.content.content.controls
+    assert text.value == "Version 1.1.0 is installed." and dialog.actions == []
+    assert [b.content for b in buttons] == ["Save it", "Send 1.2.0", "Leave"]
+    buttons[1].on_click(None)
+    assert answers == [{"id": "update", "n": 1, "answer": "1"}] and not dialog.open
+
+
+def test_a_runs_progress_lines_draw_a_bar_with_rate_and_time_left_and_stay_out_of_the_log(monkeypatch):
+    from gui.views import games
+    clock = iter([100.0, 110.0])
+    monkeypatch.setattr(games.time, "monotonic", lambda: next(clock))
+    logged = []
+    panel = SessionPanel.__new__(SessionPanel)
+    panel.__dict__.update(app=SimpleNamespace(ui=lambda fn: fn()), log=SimpleNamespace(add=logged.append),
+                          transfer=ft.Container(visible=False), rates={}, partner_state=None, traded=0)
+    panel.transfer.update = lambda: None
+    panel._line("[progress] 1000000000 5200000000 bytes Sending the update")
+    panel._line("[progress] 1047000000 5200000000 bytes Sending the update")
+    panel._line("[lcs] the console sent its version")
+    bar, detail = panel.transfer.content.controls[1].controls
+    assert panel.transfer.visible and round(bar.value, 3) == round(1047 / 5200, 3)
+    assert detail.value == "1.05 of 5.20 GB · 4.70 MB/s · 15 min left"
+    assert logged == ["[lcs] the console sent its version"]
+
+
+def test_a_runs_panel_lines_are_kept_for_its_plugin_and_drawn_on_its_page(monkeypatch, tmp_path):
+    """A `[panel]` line from a plugin's run is stored for that plugin, stays out of the log and redraws the
+    card and the library note on the page; one the app cannot read is shown in the log instead."""
+    from gui.views import library as library_view
+    from gui.views.panels import StatusCards
+    from pokeldn import panel as cards, plugins
+    from pokeldn.app import paths
+    monkeypatch.setattr(paths, "DATA", tmp_path)
+    owner = plugins.Plugin(id="updates", name="Updates", library="Updates")
+    monkeypatch.setattr(plugins, "owner", lambda key: owner if key == "updates-tool" else None)
+    monkeypatch.setattr(plugins, "library_path", lambda name: tmp_path / name)
+    (tmp_path / "Updates").mkdir()
+    (tmp_path / "Updates" / "Game 1.0.2.nsp").write_bytes(b"nsp")
+    changed, logged = [], []
+    session = SessionPanel.__new__(SessionPanel)
+    session.__dict__.update(app=SimpleNamespace(ui=lambda fn: fn()), log=SimpleNamespace(add=logged.append),
+                            running_tool=SimpleNamespace(key="updates-tool"),
+                            games=SimpleNamespace(plugin_changed=changed.append))
+    session._line(cards.PREFIX + '{"id":"console","title":"Let\'s Go, Pikachu!","lines":[["System version","23.0.1"]],'
+                  '"chips":[["Version","1.0.2"]],"tone":"ok"}')
+    session._line(cards.PREFIX + '{"file":"Game 1.0.2.nsp","state":"bad","text":"A signature does not check"}')
+    session._line(cards.PREFIX + '{"id":"x","tone":"pink"}')
+    assert changed == ["updates", "updates"]
+    assert len(logged) == 1 and "cannot read" in logged[0]
+
+    column = StatusCards(owner).control()
+    (card,) = column.controls
+    texts = [c.value for c in walk(card) if isinstance(c, ft.Text)]
+    assert texts[:2] == ["Let's Go, Pikachu!", "Version 1.0.2"] and texts[2:] == ["System version", "23.0.1"]
+    view = library_view.LibraryCard(SimpleNamespace(), owner)
+    view.control()
+    (row,) = view.listing.controls
+    assert "A signature does not check" in [c.value for c in walk(row) if isinstance(c, ft.Text)]
+
+
+def walk(control):
+    yield control
+    for name in ("content", "controls"):
+        child = getattr(control, name, None)
+        for c in (child if isinstance(child, list) else [child] if isinstance(child, ft.Control) else []):
+            yield from walk(c)
 
 
 def test_a_pop_up_opened_again_under_its_id_redraws_its_dialog(monkeypatch):
@@ -621,35 +706,39 @@ def test_a_console_code_is_typed_box_by_box_and_only_a_whole_one_reaches_the_lau
     from pokeldn.app.introspect import parser_of
     from pokeldn.app.settings import Settings
     values = {f.key: {"file": "offer.bin"} for f in tool.fields if f.kind == "pokemon"}
-    code = widgets.DigitCode(command.value_of(field, values), lambda v: values.__setitem__(field.key, v))
+    values |= {f.key: {"species": 25, "level": 10} for f in tool.fields if f.kind == "encounter"}
+    n = field.length
+    code = widgets.DigitCode(command.value_of(field, values), lambda v: values.__setitem__(field.key, v),
+                             length=n)
     assert code.value == field.default
-    for n in range(8):                      # clear whatever the default put there
-        code._typed(n, "")
-    assert bool(command.problems(tool, values)) == bool(field.default)
+    for box in range(n):                    # clear whatever the default put there
+        code._typed(box, "")
+    assert bool(command.problems(tool, values)) == bool(field.default or field.required)
     code._typed(0, "1")
     code._typed(code.at, "x2")              # a letter never lands
     assert code.at == 2 and values[field.key] == "12"
-    assert command.problems(tool, values) == [f"{field.label}: all eight digits" +
-                                              ("." if field.default else ", or none.")]
+    assert command.problems(tool, values) == [f"{field.label}: all {dict({4: 'four', 8: 'eight'})[n]} digits" +
+                                              ("." if field.default or field.required else ", or none.")]
     code._typed(2, "x")
     assert values[field.key] == "12" and code.at == 2
-    code._typed(2, "34 5-678")              # a pasted code keeps its digits only
-    assert values[field.key] == "12345678" and code.at == 7
+    whole = "12345678"[:n]
+    code._typed(2, "34 5-678"[:2 * n - 6] if n < 8 else "34 5-678")   # a pasted code keeps its digits only
+    assert values[field.key] == whole and code.at == n - 1
     assert command.problems(tool, values) == []
     args = command.build(tool, values, {}, Settings())
-    assert args[args.index(field.flag) + 1] == "12345678"
+    assert args[args.index(field.flag) + 1] == whole
     parser_of(tool.script).parse_args(args)
-    code._typed(3, "")                      # a hole keeps the digits after it in their boxes
-    assert values[field.key] == "123 5678" and command.problems(tool, values)
-    code._typed(3, "9")
-    code.at = 7
-    code._typed(7, "")
-    code.key("Backspace")                   # the Backspace that emptied box 8 is not a second one
-    assert values[field.key] == "1239567"
+    code._typed(1, "")                      # a hole keeps the digits after it in their boxes
+    assert values[field.key] == whole[0] + " " + whole[2:] and command.problems(tool, values)
+    code._typed(1, "9")
+    code.at = n - 1
+    code._typed(n - 1, "")
+    code.key("Backspace")                   # the Backspace that emptied the last box is not a second one
+    assert values[field.key] == "19" + whole[2:n - 1]
     code.cleared = (None, 0.0)
     code.key("Backspace")
-    assert values[field.key] == "123956" and code.at == 6
-    assert widgets.DigitCode(values[field.key], lambda v: None).digits[:6] == list("123956")
+    assert values[field.key] == "19" + whole[2:n - 2] and code.at == n - 2
+    assert widgets.DigitCode(values[field.key], lambda v: None, length=n).digits[:n - 2] == list("19" + whole[2:n - 2])
 
 
 def test_settings_keep_a_six_digit_switch_id_beside_the_five_digit_one(tmp_path, monkeypatch):
@@ -718,6 +807,165 @@ def test_the_boost_settings_leave_with_the_last_unticked_boost(monkeypatch):
     assert frlg_builder.KEEP.label in texts(builder.presets())
     builder._toggle(preset, member.key)
     assert frlg_builder.KEEP.label not in texts(builder.presets())
+
+
+@pytest.mark.parametrize("game,key,species", [
+    ("frlg", "event-wishmkr-jirachi", 385),
+    ("frlg", "event-doel-deoxys", 386),
+    ("frlg", "event-rocks-metang", 375),
+    ("frlg", "celebi", 251),
+    ("frlg", "mattle-ho-oh", 250),
+    ("frlg", "master-ball", 0),
+    ("swsh", "pikachu", 25),
+    ("swsh", "egg", 25),
+    ("swsh", "pikachu-uniform", 0),
+])
+def test_gift_presets_show_the_pokemon_species_and_still_select_it(monkeypatch, game, key, species):
+    """Hoenn's National Dex ids differ from FR/LG's internal ids; a named outfit isn't a Pokemon."""
+    from gui.views import gifts as view_module
+    from pokeldn.app import gift_builder
+
+    monkeypatch.setattr(view_module, "Sprite", lambda app, n, shiny, size, form=0:
+                        SimpleNamespace(control=ft.Container(data=(n, shiny), width=size)))
+    builder = view_module.GiftBuilder.__new__(view_module.GiftBuilder)
+    builder.app = None
+    builder.game, builder.module = game, gift_builder.module(game)
+    builder.value = gift_builder.normalized(game, {})
+    builder.commit = lambda rebuild=False: None
+    preset = builder.module.PRESET[key]
+    tile = next(c for c in raid_controls(builder.presets())
+                if isinstance(c, ft.Container) and c.on_click and preset.label in gift_texts(c))
+    sprites = [c.data for c in tile.content.controls if isinstance(c.data, tuple)]
+    assert sprites == ([(species, False)] if species else [])
+    tile.on_click(None)
+    assert builder.value["preset"] == key
+
+
+@pytest.mark.parametrize("species,shiny_type,form", [
+    (25, 0, 0), (25, 1, 0), (25, 2, 0), (25, 3, 0), (0, 0, 0), (146, 2, 1), (25, 0, 9),
+])
+def test_official_gift_icons_follow_the_record_and_keep_selection(monkeypatch, species, shiny_type, form):
+    from gui.views import gifts as view_module
+    from pokeldn.swsh import gift_builder, wc8
+
+    monkeypatch.setattr(view_module, "Sprite", lambda app, n, shiny, size, form=0:
+                        SimpleNamespace(control=ft.Container(data=(n, shiny, form), width=size)))
+    builder = view_module.GiftBuilder.__new__(view_module.GiftBuilder)
+    builder.app, builder.module, builder.game = None, gift_builder, "swsh"
+    builder.value = {"event": "other"}
+    builder.commit = lambda rebuild=False: None
+    raw = (wc8.pokemon_card(species, shiny_type=shiny_type, form=form) if species else
+           gift_builder.record(gift_builder.blank(kind="items")))
+    card = {"key": "test", "label": "Test gift", "summary": "A gift", "record": raw}
+    tile = builder._event_tile(card)
+    sprites = [c.data for c in tile.content.controls if isinstance(c.data, tuple)]
+    assert sprites == ([(species, shiny_type in (2, 3), form)] if species else [])
+    tile.on_click(None)
+    assert builder.value["event"] == "test"
+
+
+@pytest.mark.parametrize("game,key,initial,changed,national", [
+    ("frlg", "species", 25, 409, 385), ("frlg", "icon", 251, 277, 252),
+    ("swsh", "species", 25, 146, 146),
+])
+def test_custom_gift_previews_follow_species_form_and_shiny_edits(monkeypatch, game, key, initial,
+                                                                changed, national):
+    from gui.views import gifts as view_module
+
+    class Preview:
+        def __init__(self, app, species, shiny, size, form):
+            self.control = ft.Container()
+            self.show(species, shiny, form)
+
+        def show(self, species, shiny, form=0):
+            self.control.data = (species, shiny, form)
+
+    monkeypatch.setattr(view_module, "Sprite", Preview)
+    monkeypatch.setattr(view_module, "NamePicker", lambda *a, **kw: SimpleNamespace(control=ft.Container()))
+    builder = view_module.GiftBuilder.__new__(view_module.GiftBuilder)
+    builder.game, builder.app, builder.previews = game, None, []
+    builder.value = {"build": {"kind": "pokemon", key: initial}}
+    builder.commit = lambda rebuild=False: None
+    field = builder.name_field("Pokemon", "species", key, preview=True)
+    builder.edit(key, changed)
+    assert field.controls[1].data == (national, False, 0)
+    if game == "swsh":
+        builder.edit("form", 1)
+        builder.edit("shiny", True)
+        assert field.controls[1].data == (146, True, 1)
+        builder.state["kind"] = "egg"
+        builder.edit("shiny", True)
+        assert field.controls[1].data == (146, False, 1)
+
+
+def test_trade_preview_keeps_the_selected_form_when_shiny_changes_and_resets_on_clear(monkeypatch):
+    monkeypatch.setattr(ft.BaseControl, "update", lambda self: None)
+    picker = pokemon.PokemonPicker.__new__(pokemon.PokemonPicker)
+    picker.value = {"species": 25, "shiny": False, "options": {}}
+    shown = []
+    picker.sprite = SimpleNamespace(show=lambda species, shiny, **kw: shown.append((species, shiny, kw["form"])))
+    picker.options = OfferOptions(picker)
+    choice = picker.options._choice("form", [{"id": 0, "name": "Normal"}, {"id": 9, "name": "World"}])
+    choice.on_select(SimpleNamespace(control=SimpleNamespace(value="9")))
+    picker._shiny(SimpleNamespace(control=SimpleNamespace(value=True)))
+    picker.options._clear(None)
+    assert shown == [(25, False, 9), (25, True, 9), (25, True, 0)]
+
+
+def test_gift_form_replies_cannot_change_another_editor_or_a_newer_request(monkeypatch):
+    from gui.views import gifts as view_module
+    from pokeldn.swsh import gift_builder
+
+    monkeypatch.setattr(ft.BaseControl, "update", lambda self: None)
+    work, replies = [], []
+    monkeypatch.setattr(view_module.threading, "Thread", lambda target, daemon: SimpleNamespace(
+        start=lambda: work.append(target)))
+    monkeypatch.setattr(view_module.SERVICE, "options", lambda *a: {
+        "forms": [{"id": 0, "name": "Kanto"}, {"id": 1, "name": "Galar"}]})
+    builder = view_module.GiftBuilder.__new__(view_module.GiftBuilder)
+    builder.game = "swsh"
+    builder.app = SimpleNamespace(settings=SimpleNamespace(trainer=lambda game: {}), ui=replies.append)
+    builder.value = {"build": gift_builder.blank(species=146, form=1)}
+    builder.forms, builder.previews = ft.Container(), []
+    builder.commit = lambda rebuild=False: None
+    builder._load_forms()
+    builder._load_forms()
+    work[0]()
+    work[1]()
+    loading = builder.forms.content
+    replies[0]()
+    assert builder.forms.content is loading
+    replies[1]()
+    dropdown = next(c for c in raid_controls(builder.forms) if isinstance(c, ft.Dropdown))
+    assert dropdown.value == "1"
+    dropdown.on_select(SimpleNamespace(control=SimpleNamespace(value="0")))
+    assert gift_builder.record(builder.state)[0x242] == 0
+
+    builder._load_forms()
+    work[-1]()
+    builder.value["build"] = gift_builder.blank(kind="items", species=146)
+    loading = builder.forms.content
+    replies[-1]()
+    assert builder.forms.content is loading
+
+
+def test_offline_gift_catalog_rebuilds_never_start_sprite_workers(monkeypatch, tmp_path):
+    from gui.views import gifts as view_module, sprites as sprite_view
+    from pokeldn.app.sprites import SpriteCache
+    from pokeldn.swsh import gift_builder
+
+    monkeypatch.setattr(sprite_view, "CACHE", SpriteCache(tmp_path, online=False))
+    def unexpected(*args, **kwargs):
+        pytest.fail("An offline sprite started a worker")
+    monkeypatch.setattr(sprite_view, "WORKERS", SimpleNamespace(submit=unexpected), raising=False)
+    monkeypatch.setattr(view_module.threading, "Thread", unexpected)
+    builder = view_module.GiftBuilder.__new__(view_module.GiftBuilder)
+    builder.app = SimpleNamespace(settings=SimpleNamespace(sprites=False))
+    builder.module, builder.game = gift_builder, "swsh"
+    builder.value = {"event": ""}
+    for _ in range(3):
+        for card in gift_builder.OFFICIAL.load():
+            builder._event_tile(card)
 
 
 def test_a_pokemon_home_card_is_outlined_in_amber_and_says_why(monkeypatch):
@@ -1109,7 +1357,7 @@ def test_the_raid_card_lists_its_scripted_actions_after_its_rewards(monkeypatch)
     naming = []
     monkeypatch.setattr(raid_seed.threading, "Thread",
                         lambda target, args, daemon: SimpleNamespace(start=lambda: naming.append((target, args))))
-    monkeypatch.setattr(builder.SERVICE, "names", lambda game, kind: {
+    monkeypatch.setattr(DISPLAY_SERVICE, "names", lambda game, kind: {
         "bag": [{"id": 1127, "name": "Exp. Candy XL"}], "moves": [{"id": 315, "name": "Overheat"}]}[kind])
     desc = [2500, 65, 55, 9999, 40, 0, 0, 20, 70, 30, 3, 1, 99, 315, 2, 2, 70, 0] + [0] * 19
     charizard = dict(species=6, form=0, ability=4, flawless_ivs=0, level=100, capture_level=100,
@@ -1169,7 +1417,7 @@ GIFT_COPIES = {
 GIFT_TRAINER = {"ot": "ASH", "tid": 1, "sid": 2, "language": 2, "gender": 0}
 
 
-def gift_picker(monkeypatch):
+def gift_picker(monkeypatch, value=None, view=None):
     """The Mystery Gift - Simulated card the Games view draws, its events listed, over a stubbed builder:
     -> (card, a call that runs the worker it started last, the builder's requests, the values it saved)."""
     import flet as ft
@@ -1185,16 +1433,19 @@ def gift_picker(monkeypatch):
     monkeypatch.setattr(event_gifts.threading, "Thread", lambda target, daemon, args=None: SimpleNamespace(
         start=lambda: args is None and work.append(target)))
     asked = []
-    monkeypatch.setattr(builder.SERVICE, "gift_events",
+    monkeypatch.setattr(DISPLAY_SERVICE, "gift_events",
                         lambda game, who: asked.append((game, who)) or GIFT_EVENTS)
-    monkeypatch.setattr(builder.SERVICE, "gift_event", lambda game, key, who:
+    monkeypatch.setattr(DISPLAY_SERVICE, "gift_event", lambda game, key, who:
                         asked.append((game, key, who)) or GIFT_COPIES[key])
     app = SimpleNamespace(settings=SimpleNamespace(sprites=False, trainer=lambda game: GIFT_TRAINER),
                           page=None, ui=lambda fn: fn())
     saved = []
     tool = next(t for game in GAMES for t in game.tools if t.key == "sv-gift-host")
-    view = SimpleNamespace(app=app, game=SimpleNamespace(key="sv"), values={},
-                           set_value=lambda field, value: saved.append(value))
+    view = view or SimpleNamespace(app=app, game=SimpleNamespace(key="sv"),
+                                   values={tool.fields[0].key: value},
+                                   set_value=lambda field, value: saved.append(value))
+    view.app = app
+    app.settings.save = lambda: saved.append(dict(view.values))
     control = GamesView.input(view, tool.fields[0])
     work.pop()()
     return control, lambda: work.pop()(), asked, saved
@@ -1235,7 +1486,7 @@ def test_the_mystery_gift_card_finds_an_event_pokemon_and_offers_a_fresh_copy(mo
     gift_tile(control, "Palafin").on_click(None)
     run()
     assert asked[-1] == ("sv", "0503-964-0-10", GIFT_TRAINER)
-    assert {k: saved[-1][k] for k in ("file", "event", "species", "legal", "your_ot")} == {
+    assert {k: saved[-1][0][k] for k in ("file", "event", "species", "legal", "your_ot")} == {
         "file": "palafin.pk9", "event": "0503-964-0-10", "species": 964, "legal": True, "your_ot": False}
     assert {"Legal", "Jet Punch, Wave Crash, Haze, Protect · OT Gavin"} <= set(gift_texts(control))
     assert gift_tile(control, "Palafin").border.top.color == t.BLUE
@@ -1256,6 +1507,89 @@ def test_a_gift_the_trainer_could_not_receive_says_why_and_is_not_picked(monkeyp
     run()
     assert asked[-1] == ("sv", "1501-25-0-2", GIFT_TRAINER) and saved == []
     assert f"Your trainer from Settings cannot receive this gift: {why}." in gift_texts(control)
+
+
+def remove_gift(control, at=0):
+    buttons = [c for c in raid_controls(control) if getattr(c, "tooltip", None) == "Remove this gift"]
+    buttons[at].on_click(None)
+
+
+def test_event_queue_restores_a_single_saved_gift_and_keeps_duplicates_in_trade_order(monkeypatch):
+    from pokeldn import pokemon as builder
+    legacy = dict(GIFT_COPIES["0503-964-0-10"], species=964, event="0503-964-0-10")
+    control, run, asked, saved = gift_picker(monkeypatch, legacy)
+    calls = []
+
+    def make(game, key, who):
+        calls.append(key)
+        return dict(GIFT_COPIES[key], file=f"copy-{len(calls)}.pk9")
+    monkeypatch.setattr(DISPLAY_SERVICE, "gift_event", make)
+    for name in ("Sprigatito", "Palafin", "Palafin", "Sprigatito", "Palafin"):
+        gift_tile(control, name).on_click(None)
+        run()
+    assert [v["file"] for v in saved[-1]] == ["palafin.pk9", *[f"copy-{n}.pk9" for n in range(1, 6)]]
+    assert "6 of 6 gifts queued, traded in this order · queue full" in gift_texts(control)
+    assert gift_tile(control, "Palafin").disabled
+    gift_tile(control, "Palafin").on_click(None)
+    assert len(calls) == 5
+    remove_gift(control, 2)
+    assert [v["file"] for v in saved[-1]] == ["palafin.pk9", "copy-1.pk9", "copy-3.pk9",
+                                              "copy-4.pk9", "copy-5.pk9"]
+    assert not gift_tile(control, "Palafin").disabled
+    gift_tile(control, "Sprigatito").on_click(None)
+    run()
+    assert saved[-1][-1]["file"] == "copy-6.pk9"
+    for _ in range(6):
+        remove_gift(control)
+    assert saved[-1] == [] and "Choose up to 6 gifts; they trade in this order." in gift_texts(control)
+
+
+def test_removing_a_gift_while_another_is_being_made_keeps_the_progress_visible(monkeypatch):
+    control, run, asked, saved = gift_picker(monkeypatch)
+    gift_tile(control, "Palafin").on_click(None)
+    run()
+    gift_tile(control, "Sprigatito").on_click(None)
+    remove_gift(control)
+    assert "Making a fresh copy..." in gift_texts(control)
+    assert gift_tile(control, "Palafin").disabled
+    run()
+    assert [v["event"] for v in saved[-1]] == ["9021-906-0-11"]
+    assert "Making a fresh copy..." not in gift_texts(control)
+
+
+def test_a_gift_build_finishing_after_navigation_saves_to_its_original_tool(monkeypatch):
+    original, other = {}, {"--trade-offer": {"file": "other.pk9"}}
+    view = SimpleNamespace(game=SimpleNamespace(key="sv"), values=original)
+    view.set_value = lambda field, value: view.values.__setitem__(field.key, value)
+    control, run, asked, saved = gift_picker(monkeypatch, view=view)
+    gift_tile(control, "Palafin").on_click(None)
+    view.values = other
+    run()
+    assert original["--trade-offer"][0]["event"] == "0503-964-0-10"
+    assert other == {"--trade-offer": {"file": "other.pk9"}}
+
+
+def test_a_gifts_form_reaches_its_browser_queue_and_session_preview(monkeypatch):
+    from gui.views import games, sprites
+    asked = []
+    monkeypatch.setattr(sprites.CACHE, "cached", lambda species, shiny=False: asked.append(species))
+    monkeypatch.setitem(GIFT_EVENTS[0], "species_id", 423)
+    monkeypatch.setitem(GIFT_EVENTS[0], "form_id", 1)
+    monkeypatch.setitem(GIFT_COPIES["0503-964-0-10"], "species_id", 423)
+    monkeypatch.setitem(GIFT_COPIES["0503-964-0-10"], "form_id", 1)
+    control, run, _, saved = gift_picker(monkeypatch)
+    assert "423-east" in asked
+    asked.clear()
+    gift_tile(control, "Palafin").on_click(None)
+    run()
+    assert saved[-1][0]["form_id"] == 1 and "423-east" in asked
+    panel = SimpleNamespace(offered_entries=lambda: saved[-1], offered=None, traded=0,
+                            offering=ft.Container(), app=SimpleNamespace(settings=SimpleNamespace(sprites=False)))
+    for entries in (saved[-1], saved[-1] * 2):
+        panel.offered_entries = lambda: entries
+        asked.clear()
+        games.SessionPanel.render_offering(panel)
+        assert asked == ["423-east"] * len(entries)
 
 
 @pytest.mark.parametrize("mode", ["empty", "made"])
@@ -1279,12 +1613,12 @@ def test_a_home_gift_shows_what_the_home_tracker_setting_gave_it(monkeypatch, tm
     assert "1 of 3 event Pokemon, newest first" in gift_texts(control)
     gift_tile(control, "Sprigatito").on_click(None)
     run()
-    assert (saved[-1]["legal"], saved[-1]["home_tracker"]) == (True, mode)
+    assert (saved[-1][0]["legal"], saved[-1][0]["home_tracker"]) == (True, mode)
     assert {"Legal", warning} <= set(gift_texts(control))
     copy = tmp_path / "sprigatito.pk9"
     copy.write_bytes(b"")
     tools = {t.key: t for game in GAMES for t in game.tools}
-    entry = dict(saved[-1], file=str(copy))
+    entry = dict(saved[-1][0], file=str(copy))
     assert command.missing_offer(tools["sv-gift-host"], {"--trade-offer": entry}) == ""
     entry["legal"] = False
     assert command.missing_offer(tools["sv-host"], {"--trade-offer": [entry]}) == "The Pokemon is not legal."
@@ -1523,3 +1857,31 @@ def test_an_event_missing_from_the_gallery_stays_chosen_and_shows_missing(monkey
         assert (picker.summary.value, picker.summary.color) == ("Walking Wake", t.BLUE)
     else:
         assert (picker.summary.value, picker.summary.color) == ("Missing: Walking Wake", t.RED)
+
+
+def test_every_docs_fragment_link_scrolls_to_a_keyed_heading():
+    """A heading renamed without its links leaves a link that opens the page and scrolls nowhere."""
+    import re
+    from gui.views import docs
+    from gui.views.widgets import MarkdownDocument
+    keys, bodies = {}, {}
+    for name in os.listdir(docs.DOCS):
+        if name.endswith(".md"):
+            with open(os.path.join(docs.DOCS, name), encoding="utf-8") as f:
+                _, bodies[name] = docs.split_front_matter(f.read())
+            document = MarkdownDocument(None, None)
+            document.set_value(bodies[name])
+            keys[name] = {c.key.value for c in document.control.controls if isinstance(c.key, ft.ScrollKey)}
+    missing = [(name, link) for name, body in bodies.items()
+               for target, fragment in re.findall(r"\]\((?!https?://)([^)#\s]*)#([^)\s]+)\)", body)
+               if (os.path.basename(target) or name) in keys and fragment not in keys[os.path.basename(target) or name]
+               for link in [f"{target}#{fragment}"]]
+    assert missing == []
+
+
+def test_docs_search_finds_a_section_under_its_heading():
+    from gui.views import docs
+    found = docs.search(docs.index(docs.pages(), "Start here"), "host watchdog")
+    assert (found[0].file, found[0].anchor) == ("hardware_esp32.md", "the-host-watchdog")
+    runs = docs.snippet(found[0].text, ["host", "watchdog"])
+    assert any(hit and part.lower() in ("host", "watchdog") for part, hit in runs)

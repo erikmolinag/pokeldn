@@ -200,8 +200,10 @@ joiner's address. The version-4 location deserializer (`0x0185eff8` onward) stor
 gift scene and accepted on the trade scene.
 
 The maximum `session+0x1F0` is written only by `0x006b9900` (`str w1, [x0, #0x1f0]`), reached through
-the uncalled thunk `0x006b5c00` and the wrapper `0x0110e5e0`, whose two callers `0x00bd9b30` and
-`0x01031c74` (`SetMax(GetCount())`) are the raid-den and rental-multi matching paths. Read live in one
+the uncalled thunk `0x006b5c00` and the wrapper `0x0110e5e0`, whose two callers (`SetMax(GetCount())`)
+are the Dynamax Adventure matching (`0x00bd9b30`, among the `ChikaMatchingState*` states
+`0x00bd1978..0x00bda158`) and the Max Raid den (`0x01031c74`, among `View_NestHole`,
+`StateGuestReady`, `StateHostReady` `0x0102aba4..0x010370cc`). Read live in one
 running game it is 0 on the gift screen, 2 hosting a link trade and 4 hosting a Max Raid, with the
 same filter armed in all three. The raid host advertises `NodeCountMax` 4; the gift screen advertises
 2 over a Pia maximum of 0.
@@ -716,6 +718,30 @@ The flags at `+0x10` set how often a console takes a card ([What the menu refuse
 
 Two Pokemon cards carry a version mask of 1 or 2 and are skipped by the other version.
 
+### Cards that share an id
+
+Different distributions reused card ids. Once a save has taken a once-per-id card (flag bit 0), it
+refuses every other card with that id:
+
+| card id | once-per-id cards |
+|---|---|
+| 1 | the 2022 shiny Galarian Articuno, Zapdos and Moltres (J and M each); the Poke Ball, Great Ball and Ultra Ball Guy tees |
+| 101 | the Pokemon Center Eevee and Pikachu, two revisions each |
+| 118 | the PCSG Eevee and Pikachu |
+| 122 | the Pokemon Center Milcery, Ribbon Sweet and Star Sweet, two revisions each |
+| 125 | the PCSG Milcery, Ribbon Sweet and Star Sweet |
+
+Cards 103 (six cards) and 139 (seven) carry flag bit 2: a save that took one refuses another with the
+same id unless the second card's date is later.
+
+The app's Official events mode takes a card id per card (`event_ids` in the tool's value) and lists
+the cards that share the chosen card's id. A changed id rewrites only the u16 at `+0x08` and reseals
+the record. Under unicorn, the receipt check `0x00ff1a30` refuses the official Articuno (id 1) on a
+save whose bitmap holds id 1, and takes the same card as id 2. The validator `0x010b5de0` and PKHeX
+accept the changed record. A once-per-id card's id stays in 1..2047, because the bitmap read has no
+bound ([What the menu refuses](#what-the-menu-refuses)). The command line does the same with
+`--gift-file FILE --patch 0x08=0200`. No retail console has received a card with a changed id yet.
+
 ## Clothing
 
 A kind-4 record carries twelve pairs of u32 from `+0x20`, a category then an index: the first six
@@ -878,6 +904,13 @@ zone applies, falling back to `ToCalendarTimeInUtc`. The year is drawn with two 
 Only a local-wireless card keeps its date. Every other route overwrites the eight bytes with
 `nn::time::StandardNetworkSystemClock::GetCurrentTime` (`0x00ff3f8c` -> `0x01449ca0`; PLT
 `0x01900050`, GOT `0x0260fbb8`), packed by `0x016cbfd0` and `0x016cc1d0`.
+
+The distributor fills an empty date with the computer's current UTC time immediately before
+sending a card, then reseals its checksum. A nonzero distributor date is preserved. Official event
+files often carry eight zero bytes because the online route supplies their receipt time. This
+fallback gives those files a date over local wireless as well. Exported files keep their original
+date, and cards already stored in the console's album are unchanged. The Pokemon's own met date
+is separate from the album date.
 
 ## Where the album keeps a card
 

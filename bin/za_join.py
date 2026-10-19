@@ -23,7 +23,7 @@ if os.path.isdir(BUNDLED_LDN):
     sys.path.insert(0, BUNDLED_LDN)
 
 import trio
-import ldn
+from pokeldn.ldn import api as ldn, radios
 
 from pokeldn.host_support import open_output
 from pokeldn import pokemon as pokemon_service
@@ -237,6 +237,11 @@ class GameStreams:
             if item[1] == LAST_STEP:
                 self.traded_at = elapsed
                 self.trades += 1
+                # Written once the trade completes; a pick can still be withdrawn.
+                if getattr(self.args, "offer_out", None) and self.received is not None:
+                    pokemon_service.save_received(
+                        "za", pokemon_service.trade_path(self.args.offer_out, self.trades),
+                        self.received)
                 show_done()
                 screen.received("za", self.received)
                 self.arriving = True
@@ -277,11 +282,6 @@ class GameStreams:
             self.host_offers += 1
             if inner[-1:] == bytes([OFFER_PICK]):
                 self.received = bytes(inner)
-            # A preview is the console's cursor on its box; only its pick is what it trades.
-            if (getattr(self.args, "offer_out", None) and len(inner) == za.pokemon.OFFER_SIZE
-                    and inner[-1] == OFFER_PICK):
-                pokemon_service.save_received(
-                    "za", pokemon_service.trade_path(self.args.offer_out, self.trades + 1), inner)
             if inner[-1:] == bytes([OFFER_PICK]) and self.offer and not self.picked:
                 self.picked = True
                 self.scheduled.append((elapsed + 1.5, self.offer))
@@ -325,6 +325,8 @@ class GameStreams:
 def build_parser():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--print-packets", action="store_true",
+                    help="print every packet in and out; the --capture file keeps them either way")
     ap.add_argument("--phy", default="auto")
     ap.add_argument("--ifname", default="ldnclient")
     ap.add_argument("--keys", default="~/.switch/prod.keys")
@@ -484,10 +486,11 @@ async def run_session(args, keys, host_ip, host_mac, our_ip, our_mac, record):
         sent += 1
         record(rec="tx", data=out.hex(), to=to, proto=proto, t=time.time(),
                dt=round(time.monotonic() - t0, 4))
-        print(f"[za] -> proto 0x{proto:02x} "
-              + "+".join(str(len(p)) for _, p, _ in items)
-              + f" bytes, dst={dst_var:#06x} src={src_var:#06x} flags={flags:#04x}"
-              + (f", {note}" if note else ""))
+        if args.print_packets:
+            print(f"[za] -> proto 0x{proto:02x} "
+                  + "+".join(str(len(p)) for _, p, _ in items)
+                  + f" bytes, dst={dst_var:#06x} src={src_var:#06x} flags={flags:#04x}"
+                  + (f", {note}" if note else ""))
 
     def send(proto, payload, **kwargs):
         return send_messages([(proto, payload, kwargs.pop("msgflags", None))], **kwargs)
@@ -622,8 +625,9 @@ async def run_session(args, keys, host_ip, host_mac, our_ip, our_mac, record):
                                 payload=m.payload.hex()) for m in messages]
         for m in messages:
             counts[m.proto] = counts.get(m.proto, 0) + 1
-        print(f"[za] datagram {seen} at {now - t0:.2f}s, src={header.src:#06x} "
-              f"dst={header.dst:#06x}: " + "; ".join(describe_msg(m) for m in messages))
+        if args.print_packets:
+            print(f"[za] datagram {seen} at {now - t0:.2f}s, src={header.src:#06x} "
+                  f"dst={header.dst:#06x}: " + "; ".join(describe_msg(m) for m in messages))
         record(**row)
         if conn is None:
             continue
@@ -909,7 +913,7 @@ def main(argv=None):
             param.phyname, param.ifname = phy, args.ifname
 
             async def seat():
-                with trio.move_on_after(args.connect_timeout) as scope:
+                with trio.move_on_after(radios.join_timeout(args.connect_timeout)) as scope:
                     async with ldn.connect(param) as network:
                         scope.deadline = float("inf")
                         info = network.info()

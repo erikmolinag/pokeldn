@@ -22,6 +22,7 @@
 #include "led.h"
 #include "private_wifi.h"
 #include "usbwatch.h"
+#include "ble.h"
 #include "wire.h"
 
 #define PROTOCOL_VERSION 1
@@ -157,8 +158,10 @@ static void promiscuous_rx(void *buffer, wifi_promiscuous_pkt_type_t type)
         /* Sniff: every management or data frame to or from one MAC, whole, without FCS. */
         const int length = (int)packet->rx_ctrl.sig_len - 4;
         const uint8_t *frame = packet->payload;
+        /* Every action frame too: a network the console moves to is keyed by its own advertisement. */
         if ((type == WIFI_PKT_DATA || type == WIFI_PKT_MGMT) && length >= 24 && length <= 1600 &&
-            (!memcmp(frame + 4, s_sniff_mac, 6) || !memcmp(frame + 10, s_sniff_mac, 6))) {
+            (!memcmp(frame + 4, s_sniff_mac, 6) || !memcmp(frame + 10, s_sniff_mac, 6) ||
+             (type == WIFI_PKT_MGMT && frame[0] == 0xD0))) {
             /* The PHY fields: a flood's airtime is its bytes over its rate. */
             const uint8_t head[5] = {packet->rx_ctrl.channel, (uint8_t)packet->rx_ctrl.rssi,
                                      rx_sig_mode(&packet->rx_ctrl), packet->rx_ctrl.rate,
@@ -266,6 +269,8 @@ static void tx_done(uint8_t ifidx, uint8_t *data, uint16_t *length, bool acked)
             atomic_fetch_add(&s_tx_queued_n, 1);
         }
     }
+    /* Diagnostic only; over BLE it crowded the console's own RX_ETH out of the queue. */
+    if (ble_linked()) return;
     uint8_t head[12];
     memcpy(head, &now, 4);
     memcpy(head + 4, &queued, 4);
@@ -688,7 +693,12 @@ static void send_info(void)
     esp_read_mac(head + 7, ESP_MAC_WIFI_SOFTAP);
     head[13] = (uint8_t)(chip.revision / 100);
     char text[128];
-    snprintf(text, sizeof(text), "pokeldn-radio " CONFIG_IDF_TARGET " version=%s idf=" IDF_VER,
+#if POKELDN_BLE
+#define LINK_WORD " link=ble"   /* gui/board.py Identity.ble: the Board page names the Bluetooth build */
+#else
+#define LINK_WORD ""
+#endif
+    snprintf(text, sizeof(text), "pokeldn-radio " CONFIG_IDF_TARGET " version=%s idf=" IDF_VER LINK_WORD,
              esp_app_get_description()->version);
     wire_send(MSG_INFO, head, sizeof(head), text, strlen(text));
     usbwatch_report();
@@ -835,6 +845,9 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_wifi_start());
     esp_wifi_set_ps(WIFI_PS_NONE);
     start_sniffer();
+#if POKELDN_BLE
+    ble_start();
+#endif
     wire_start(command);
     usbwatch_start();
     led_start(led_state, button_pressed);

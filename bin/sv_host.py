@@ -265,6 +265,8 @@ def build_parser():
     ap.add_argument("--host-player-id", default="00000000000000020000000000000000")
     ap.add_argument("--no-rtt", action="store_true", help="do not answer RTT requests")
     ap.add_argument("--no-ack", action="store_true", help="do not acknowledge reliable streams")
+    ap.add_argument("--print-packets", action="store_true",
+                    help="print every packet in and out; the --capture file keeps them either way")
     ap.add_argument("--ack-period", type=float, default=1.0,
                     help="seconds between the periodic bulk acks on every port the console used")
     ap.add_argument("--clock", action="store_true", help="answer clone clock requests, if any")
@@ -420,6 +422,11 @@ def build_parser():
                     help="the unlock stage the partners come from, which sets their pool, their "
                          "level being four fifths of --raid-pokemon's; by default --raid-progress's, "
                          "six stars for a black crystal or a seven-star event raid")
+    ap.add_argument("--raid-serve", metavar="NAME", nargs="?", const="", default=None,
+                    help="serve the raid battle from this station with a plugin's battle server "
+                         "(NAME, or the first one loaded): the console and our Pokemon fight one "
+                         "battle; one console only; a failure hands the network over as without it "
+                         "(docs/sv_raid.md, Serving the battle)")
     ap.add_argument("--send", action="append", default=[],
                     help="PROTO:PORT:HEX, a reliable data message to send once the console has "
                          "joined (host seq 1 on that port, INITIALIZED); repeatable")
@@ -475,8 +482,18 @@ def prepare_raid(ap, args):
             raise ValueError(f"--raid-partner: {args.raid_players} console(s) leave {free} slot(s) "
                              "to NPC partners")
         partner_seed = raid_partners.seed_for(stage, wanted)
+        serve = None
+        if args.raid_serve is not None:
+            from pokeldn import plugins
+            from pokeldn.sv import raid_battle
+            server = plugins.battle_server("sv", args.raid_serve)
+            if server is None:
+                raise ValueError("--raid-serve: no plugin battle server for Scarlet / Violet is loaded"
+                                 + (f" named {args.raid_serve!r}" if args.raid_serve else ""))
+            print(f"[sv] serving the raid battle with {server.label} (plugin {server.plugin})")
+            serve = lambda bootstrap: raid_battle.RaidBattle(server.factory, bootstrap)  # noqa: E731
         group = raid.RaidGroup(found, record, args.raid_reward or None, players=args.raid_players,
-                               partner_seed=partner_seed, stage=stage)
+                               partner_seed=partner_seed, stage=stage, serve=serve)
     except ValueError as exc:
         ap.error(str(exc))
     rewards = args.raid_reward or found.rewards
@@ -600,15 +617,18 @@ def main(argv=None):
             if ip in stages:
                 stages[ip].partner.hear(fields)
 
-    def report_offer(ip, body, n):
+    def report_offer(ip, body):
         try:
             print(f"[sv] {ip}: offers {pokemon.describe(pokemon.from_wire(body))}")
         except ValueError as exc:
             print(f"[sv] {ip}: offered {len(body)} bytes that do not read as a record: {exc}")
-        if args.offer_out:
+
+    def keep_received(ip, body, n):
+        """Written once the trade completes; an offer can still be withdrawn."""
+        if args.offer_out and body is not None:
             path = pokemon_service.trade_path(args.offer_out, n)
             pokemon_service.save_received("sv", path, body)
-            print(f"[sv] {ip}: offer written to {path}")
+            print(f"[sv] {ip}: received record written to {path}")
 
     game_data = binascii.unhexlify(args.game_data) if args.game_data else None
     if args.code and game_data is None:
@@ -673,6 +693,7 @@ def main(argv=None):
     list_seq = [args.update_seq]
     listed = set()              # src_ip already sent a station list on this seat
     finished_ips = set()
+    served = [False]            # the served battle's stop was reported
     battle_seq = [None]         # the station list's sequence at the battle
     net_request_seq = {}        # src_ip -> the one Net 0x11 sequence a raid host repeats
     last_ack = {}
@@ -815,7 +836,8 @@ def main(argv=None):
         last_ack[(src_ip, protocol, port)] = time.time()
         record(rec="out", dst=src_ip, kind="reliable ack", protocol=protocol, port=port,
                ack_id=high + 1, hex=pkt.hex(), t=time.time())
-        print(f"[sv] -> {src_ip}: ack 0x{protocol:02x}:{port} ack_id {high + 1} ({why})")
+        if args.print_packets:
+            print(f"[sv] -> {src_ip}: ack 0x{protocol:02x}:{port} ack_id {high + 1} ({why})")
 
     def send_raid(ip, seq, flags, payload, lowest, retry=False):
         """One of the raid's messages on 0x80 port 0, kept until the console acknowledges it."""
@@ -936,8 +958,10 @@ def main(argv=None):
                                hex=pkt.hex(), t=now)
                         print(f"[sv] -> {ip}: Session type 7, the console hosts next")
                     elif action[0] == "migrating":
+                        # Every seated console, ranked as last sent: a rank is who hosts next.
                         pkt = build_net_probe(
-                            keys, transport.our_ip, transport.our_mac, [transport.our_ip, ip],
+                            keys, transport.our_ip, transport.our_mac,
+                            list(net_tables.get(ip, (transport.our_ip, ip))),
                             net_request_seq.get(ip, net_seqid) + 1, os.urandom(8),
                             args.max_participants if args.net_stations is None else args.net_stations,
                             net_flags=(ESTABLISHING_FLAGS if args.net_flags is None
@@ -964,6 +988,13 @@ def main(argv=None):
                 if stage.left and ip not in finished_ips:
                     finished_ips.add(ip)
                     print(f"[sv] {ip}: the battle has begun with our Pokemon; the console left")
+            if raid_group is not None and raid_group.battle_error is not None and not served[0]:
+                served[0] = True
+                print(f"[sv] the served battle stopped ({raid_group.battle_error}); the consoles "
+                      f"take the network and fight their own")
+            if raid_group is not None and raid_group.battle and raid_group.battle.over:
+                print("[sv] the served battle is over; closing")
+                break
             if raid_group is not None and raid_group.left:
                 print(f"[sv] the battle has begun for {len(raid_group.members)} console(s); the "
                       f"network is theirs")
@@ -992,7 +1023,9 @@ def main(argv=None):
                     sv.build_advertise_data(num_players=players, game_data=game_data,
                                             code=args.code))
                 print(f"[sv] advertising {players} player(s)")
-            if not args.no_net_probe:
+            # From the raid's start the seats are fixed: a regular Net 0x11 after the handover's
+            # is-migrating one sent a console back to us as its host and out of the battle's session.
+            if not args.no_net_probe and (raid_group is None or raid_group.started_at is None):
                 if raiding:
                     # A Pia host sends every station the new table on each seat change (`0x69c79c`,
                     # docs/sv_raid.md, Several consoles).
@@ -1167,8 +1200,9 @@ def main(argv=None):
                     continue                    # one console's traffic to another
                 for msg in msgs:
                     counts[msg.protocol] = counts.get(msg.protocol, 0) + 1
-                    print(f"[sv] <- {src_ip} {header!r} footer={ids}")
-                    print(f"       {_describe(msg)}  {msg.payload.hex()}")
+                    if args.print_packets:
+                        print(f"[sv] <- {src_ip} {header!r} footer={ids}")
+                        print(f"       {_describe(msg)}  {msg.payload.hex()}")
                     record(rec="msg", src=src_ip, protocol=msg.protocol, port=msg.port,
                            flags=msg.message_flags, src_var=header.src_var, dst_var=header.dst_var,
                            payload=msg.payload.hex(), t=time.time())
@@ -1400,11 +1434,12 @@ def main(argv=None):
                                     and not rm["bitmap"][0] & 1 << HOST_STATION_INDEX):
                                 continue                # addressed to another console only
                             if rm and (rm["flags"] & reliable5.FLAG_APPLICATION_DATA):
-                                print(f"[sv] <- {src_ip}: DATA 0x{msg.protocol:02x}:{msg.port} "
-                                      f"stream {rm['stream_id']} seq {rm['sequence_id']} "
-                                      f"{reliable5.flag_names(rm['flags'])} bits={rm['destination_bits']} "
-                                      f"map={rm['bitmap']} {len(rm['payload'])}B "
-                                      f"{rm['payload'].hex()}")
+                                if args.print_packets:
+                                    print(f"[sv] <- {src_ip}: DATA 0x{msg.protocol:02x}:{msg.port} "
+                                          f"stream {rm['stream_id']} seq {rm['sequence_id']} "
+                                          f"{reliable5.flag_names(rm['flags'])} bits={rm['destination_bits']} "
+                                          f"map={rm['bitmap']} {len(rm['payload'])}B "
+                                          f"{rm['payload'].hex()}")
                                 record(rec="data", src=src_ip, protocol=msg.protocol, port=msg.port,
                                        seq=rm["sequence_id"], flags=rm["flags"],
                                        payload=rm["payload"].hex(), t=time.time())
@@ -1432,9 +1467,11 @@ def main(argv=None):
                                     while offers_seen.get(src_ip, 0) < len(st.joiner_offers):
                                         n = offers_seen.get(src_ip, 0) + 1
                                         offers_seen[src_ip] = n
-                                        report_offer(src_ip, st.joiner_offers[n - 1], n)
+                                        report_offer(src_ip, st.joiner_offers[n - 1])
                                     if st.trades > trades_done.get(src_ip, 0):
                                         trades_done[src_ip] = st.trades
+                                        keep_received(src_ip, (st.joiner_offers or [None])[-1],
+                                                      st.trades)
                                         show_done()
                                         screen.received("sv", (st.joiner_offers or [None])[-1])
                                         if st.done:
@@ -1533,11 +1570,12 @@ def main(argv=None):
                                     window = (raid_window if (msg.protocol, msg.port)
                                               == (PROTO_BROADCAST_RELIABLE, 0) else channel_window)
                                     window.acked(key, entry["ack_id"], entry["mask"])
-                                print(f"[sv] <- {src_ip}: ACK 0x{msg.protocol:02x}:{msg.port} "
-                                      f"low={rm['lowest_pending']} bits={rm['destination_bits']} "
-                                      f"map={rm['bitmap']} u0={a['unknown0']} "
-                                      + " ".join(f"[s{e['stream_id']} ack={e['ack_id']} f={e['field_0x50']}]"
-                                                 for e in a["entries"]))
+                                if args.print_packets:
+                                    print(f"[sv] <- {src_ip}: ACK 0x{msg.protocol:02x}:{msg.port} "
+                                          f"low={rm['lowest_pending']} bits={rm['destination_bits']} "
+                                          f"map={rm['bitmap']} u0={a['unknown0']} "
+                                          + " ".join(f"[s{e['stream_id']} ack={e['ack_id']} f={e['field_0x50']}]"
+                                                     for e in a["entries"]))
                                 if (not args.no_ack and src_ip in station_ids
                                         and key not in last_ack):
                                     send_ack(src_ip, msg.protocol, msg.port,

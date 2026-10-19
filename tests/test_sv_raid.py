@@ -16,7 +16,7 @@ from pokeldn.app.catalog import GAMES
 from pokeldn.app.command import build
 from pokeldn.app.settings import Settings
 from pokeldn.ldn import channel_table, game_channel, pia6, pia_connect, reliable5
-from pokeldn.sv import (lz4, port2, raid, raid_encounter, raid_event, raid_partners, raid_scan, raid_search,
+from pokeldn.sv import (lz4, port2, raid, raid_battle, raid_encounter, raid_event, raid_partners, raid_scan, raid_search,
                         streams)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -188,6 +188,33 @@ def test_partners_take_four_fifths_of_the_host_pokemon_s_level_whatever_the_stag
     assert [raid_partners.level_for(host) for host in (20, 50, 100, 37, 12)] == [16, 40, 80, 29, 9]
 
 
+# Partner seed, then the encryption constant, TID, SID, PID, height and weight both partners' records
+# held in an emulated Scarlet 4.0.0's memory during five raid battles (docs/sv_raid.md, Partners).
+PARTNER_RECORDS = [
+    (0xB040669FFB23783B, 0x1DC0E296, 20321, 19657, 0xAB3F81C5, 106, 198),
+    (0x89F4C84C70AD570C, 0x934AC167, 61641, 52925, 0x7BB08914, 88, 136),
+    (0x8AF9920EC9C3F0CA, 0xEC615B25, 53888, 50857, 0x86C6240B, 110, 71),
+    (0xAB3BCF8D691DC958, 0x8BBB33B3, 30677, 58200, 0x4BA16A7D, 151, 195),
+    (0xC39985CC37F43B70, 0x5A91A5CB, 24528, 23528, 0x76D0FABB, 87, 172)]
+
+
+@pytest.mark.parametrize("record", PARTNER_RECORDS)
+def test_a_partner_seed_gives_the_identity_and_size_a_scarlet_gave_its_partners(record):
+    assert raid_partners.identity(record[0]) == record[1:]
+
+
+def test_the_partner_table_is_the_game_s_raid_trainer_tables():
+    """raid_partners.json is the game's raid_trainer_01..03 and trdata entries; Serebii's text agrees
+    with it, with Steel for Henry, and Dylan and Luke take their species' default Tera type."""
+    for stage in range(len(raid_partners.LEVELS)):
+        game, ours = raid_partners.game_pool(stage), raid_partners.pool(stage)
+        assert [g["species"] for g in game] == [p.species for p in ours]
+        assert {g["level"] for g in game} == {raid_partners.LEVELS[stage]}
+        assert [raid_encounter.TERA_TYPES[g["tera"]] if g["tera"] is not None else p.trainer
+                for g, p in zip(game, ours)] == [p.trainer if p.trainer in ("Dylan", "Luke") and stage > 2
+                                                  else p.tera for p in ours]
+
+
 def test_a_partner_seed_draws_the_trainers_asked_for_in_slot_order():
     for names in ([], ["Luke"], ["Dylan", "Luke"], ["ava", " Eli "]):
         wanted = [raid_partners.trainer(name) for name in names]
@@ -212,13 +239,15 @@ def test_the_raidpoint_carries_the_partner_seed_and_the_raid_s_stage():
 
 
 def test_lz4_blocks_cross_an_independent_decoder():
-    """Ours read by `nso_read.lz4_block`; one liblz4 1.10 made (LZ4_compress_default) read by ours."""
-    from nso_read import lz4_block
+    """Ours read by the NSO reader's `lz4_block`; one liblz4 1.10 made (LZ4_compress_default), with
+    overlapping matches, read by both."""
+    from pokeldn.switch.nso import lz4_block
     plain = raid.bootstrap(raid_encounter.generate(0xBD13FB43), ())
     assert lz4_block(lz4.compress(plain), len(plain)) == plain
     theirs = bytes.fromhex("ff0552616964506f696e745f504f4b454c444e5f30000100145f504b4c444e0500240f6300"
                            "06500000000000")
-    assert lz4.decompress(theirs, 149) == b"RaidPoint_POKELDN_0" + bytes(40) + b"PKLDN" * 12 + bytes(30)
+    want = b"RaidPoint_POKELDN_0" + bytes(40) + b"PKLDN" * 12 + bytes(30)
+    assert lz4.decompress(theirs, 149) == lz4_block(theirs, 149) == want
 
 
 def test_the_port2_session_and_the_channel_table_are_a_retail_host_s():
@@ -476,6 +505,8 @@ class RaidGuestConsole:
         self.done = set()
         self.packet_ids = {}                # destination 1 or not -> the last packet id taken
         self.left = False
+        self.stay = 0.0                         # seconds on the network after NetStartHostMigration
+        self.leave_at = None
         self.pokemon = party(species)
         self.later_join = clock.now + join_at - 0.2      # on the network before its join
         self.at(join_at, pia6.build_session_join(self.cid, self.var, self.ip,
@@ -547,8 +578,8 @@ class RaidGuestConsole:
         if migration and migration["target_var"] == self.var:
             self.at(0.0, pia_connect.build_session_migration_ack_v11(
                 self.cid, self.var, migration["host_constant_id"], migration["host_var"]), 0x98)
-        if protocol == 0x2C and p[:2] == bytes([1, 0x40]):
-            self.left = True
+        if protocol == 0x2C and p[:2] == bytes([1, 0x40]) and self.leave_at is None:
+            self.leave_at = self.clock.now + self.stay
 
     def answer_data(self, protocol, port, rm, body):
         if protocol == 0x7C:
@@ -579,6 +610,8 @@ class RaidGuestConsole:
             self.send_data(2.0, 0x80, 0, raid.message(raid.KEY_BATTLE, 0x93, 1, 7, bytes(4)))
 
     def tick(self):
+        if self.leave_at is not None and self.clock.now >= self.leave_at:
+            self.left = True
         for item in [x for x in self.later if x[0] <= self.clock.now]:
             self.later.remove(item)
             _, body, protocol, port, flags = item
@@ -589,7 +622,7 @@ class RaidGuestConsole:
 
 
 def run_raid_host(monkeypatch, tmp_path, rewards=(), extra=(), ready_after=2.4, seconds=60,
-                  consoles=None):
+                  consoles=None, bag=None):
     """-> the scripted console (or the list given in `consoles`, made with the clock) and the clock,
     after the host has run against them."""
     clock = Clock()
@@ -641,7 +674,7 @@ def run_raid_host(monkeypatch, tmp_path, rewards=(), extra=(), ready_after=2.4, 
     monkeypatch.setattr(sv_host, "needs_root", lambda: False)
     monkeypatch.setattr(sv_host.pokemon_service, "prepare_file", lambda game, path, **kw: path)
     monkeypatch.setattr(sv_host.pokemon_service.SERVICE, "names",
-                        lambda game, kind: [{"id": 15, "name": "Quick Ball"}])
+                        lambda game, kind: bag if bag is not None else [{"id": 15, "name": "Quick Ball"}])
     tool = next(t for game in GAMES for t in game.tools if t.key == "sv-raid-host")
     args = build(tool, {"--raid-pokemon": {"file": str(ours)}, "--raid-seed": "000F34C3",
                         "--raid-reward": [{"item_id": str(i), "quantity": str(q)} for i, q in rewards]},
@@ -711,12 +744,15 @@ def test_three_consoles_fight_one_raid(monkeypatch, tmp_path):
     """`--raid-players 3`: each console takes the next seat, every station list names the four
     stations, the start waits for the last console's Ready, the one bootstrap carries every
     Pokemon in its seat, and the network goes to seat 1 while seats 2 and 3 draw the is-migrating
-    status and NetStartHostMigration. A fourth console's join goes unanswered."""
-    made, clock = run_raid_host(
-        monkeypatch, tmp_path, extra=["--raid-players", "3"], seconds=120,
-        consoles=lambda clock: [RaidGuestConsole(clock, 2.4, n, species, join_at)
-                                for n, species, join_at in ((1, 658, 0.2), (2, 6, 8.0), (3, 150, 15.0),
-                                                            (4, 1, 17.0))])
+    status and NetStartHostMigration; seats 2 and 3 stay on the network a while after seat 1 has
+    left, as a retail Violet did. A fourth console's join goes unanswered."""
+    def consoles(clock):
+        made = [RaidGuestConsole(clock, 2.4, n, species, join_at) for n, species, join_at in
+                ((1, 658, 0.2), (2, 6, 8.0), (3, 150, 15.0), (4, 1, 17.0))]
+        made[1].stay = made[2].stay = 1.5
+        return made
+    made, clock = run_raid_host(monkeypatch, tmp_path, extra=["--raid-players", "3"], seconds=120,
+                                consoles=consoles)
     consoles, fourth = made[:3], made[3]
     assert not [r for r in fourth.seen if r["protocol"] == 0x98]
     readies = []
@@ -761,10 +797,17 @@ def test_three_consoles_fight_one_raid(monkeypatch, tmp_path):
     assert all(start_of(c)["t"] > max(readies) for c in consoles)
     handed = [[r for r in c.seen if r["protocol"] == 0x98 and r["data"][0] == 7] for c in consoles]
     assert handed[0] and not handed[1] and not handed[2]
-    for console in consoles[1:]:
-        status = [r for r in console.seen if r["protocol"] == 0x2C and r["data"][1] == 0x11
+    for console in consoles:
+        status = [r["data"] for r in console.seen if r["protocol"] == 0x2C and r["data"][1] == 0x11
                   and r["data"][29] == 1]
-        assert status and any(r["data"] == bytes.fromhex("01400000") for r in console.seen
+        # Every console ranks every seat: one ranking only itself after us opened its own network.
+        assert status and [status[-1][30 + 21 * k + 1] for k in range(4)] == [0, 1, 2, 3]
+        assert all(status[-1][30 + 21 * k + 3:30 + 21 * k + 7] != bytes(4) for k in range(4))
+        nets = [r["data"][29] for r in console.seen if r["protocol"] == 0x2C and r["data"][1] == 0x11]
+        # No plain table after the is-migrating one: it takes the console back as our station.
+        assert 0 not in nets[nets.index(1):]
+    for console in consoles[1:]:
+        assert any(r["data"] == bytes.fromhex("01400000") for r in console.seen
                               if r["protocol"] == 0x2C)
 
 
@@ -1023,3 +1066,90 @@ def test_our_guest_joins_a_console_s_raid_and_leaves_its_pokemon_in_the_battle(m
     battle_ack = [r for r in got if (r["protocol"], r["port"]) == (0x80, 0) and "data" not in r]
     leave = [r for r in got if r["protocol"] == 0x98 and r["payload"][0] == 3]
     assert len(leave) == 1 and leave[0] is got[-1] and leave[0]["t"] - battle_ack[-1]["t"] < 0.06
+
+
+class ServedBattleConsole(RaidGuestConsole):
+    """The scripted console, then at battle slot 2 of a served battle (pokeldn.sv.raid_battle) whose
+    bootstrap is `boot`: each odd server step answered 0.3 s later, a request with its Pokemon's first
+    move on the boss and the boss's first move on it, on 0x80 port 0 as its battle-start frames."""
+
+    def __init__(self, clock, boot):
+        super().__init__(clock)
+        self.battle = []                        # (x, message) received in the battle
+        self.boot = boot
+
+    def answer_data(self, protocol, port, rm, body):
+        super().answer_data(protocol, port, rm, body)
+        if (protocol, port) != (0x80, 0):
+            return
+        framed = raid_battle.unframe(body)
+        if framed is None:
+            return
+        x, _, msg = framed
+        self.battle.append((x, msg))
+        if x != raid_battle.SERVER:
+            return
+        if msg[0] == raid_battle.REQUEST:
+            moves = [raid_battle.first_move(self.boot[o:o + gen9.SIZE_PARTY]) if self.boot else 0
+                     for o in (gen9.SIZE_PARTY, 4 * gen9.SIZE_PARTY)]
+            reply = raid_battle.command(msg, 2, *moves)
+        elif msg[0] & 1:
+            reply = raid_battle.answer(msg, 2)
+        else:
+            return
+        self.send_data(0.3, 0x80, 0, raid_battle.frame(3, 5, reply), compressed=True)
+
+
+class ScriptedServer:
+    """A battle server with the plugin interface (docs/plugins.md, A battle server): step 1 to every
+    slot, a request (5) once every slot answered it, then the end sequence once the four player slots
+    sent their commands. Moves the battle in each frame that queued something."""
+    END = (0x25, 0x29, 0x49, 0x35, 0x37)
+
+    def __init__(self, bootstrap, partners):
+        assert len(bootstrap) >= 6 * gen9.SIZE_PARTY and len(partners) == 2
+        self.t, self.queued, self.got = 0.0, {s: [] for s in range(5)}, {}
+
+    def _send(self, kind):
+        for slot in range(5):
+            self.queued[slot].append(bytes([kind]) + bytes(0x17) + bytes([5, slot]) + bytes(6))
+
+    def start(self, now):
+        self.t = now
+        self._send(0x01)
+        return 1
+
+    def receive(self, slot, message):
+        self.got.setdefault(message[0], set()).add(slot)
+        if (message[0], len(self.got[message[0]])) in ((0x02, 5), (0x06, 4)):    # the boss sends no command
+            for kind in ((0x05,) if message[0] == 0x02 else self.END):
+                self._send(kind)
+
+    def run(self, until):
+        self.t = max(self.t, until)
+        return 0
+
+    def sent(self, slot):
+        out, self.queued[slot] = self.queued[slot], []
+        return out
+
+
+def test_a_console_fights_the_battle_we_serve(monkeypatch, tmp_path, capsys):
+    """The launcher's served battle through the scripted console, with a plugin's battle server: the
+    console's answers reach the server, the server's steps reach the console, and the run closes at
+    the battle's end with no handover."""
+    from pokeldn import plugins
+    plugin = plugins.Plugin(id="scripted", name="scripted")
+    plugins.API(plugin).add_battle_server("sv", "scripted", ScriptedServer)
+    monkeypatch.setattr(plugins, "load", lambda: [plugin])
+    try:
+        made, _ = run_raid_host(monkeypatch, tmp_path, extra=["--raid-serve", "scripted"], seconds=900,
+                                consoles=lambda clock: [ServedBattleConsole(clock, None)])
+    finally:
+        plugins._battle_servers.clear()
+    console = made[0]
+    kinds = [m[0] for x, m in console.battle if x == raid_battle.SERVER]
+    assert kinds == [0x01, 0x05, *ScriptedServer.END]
+    assert not [r for r in console.seen if r["protocol"] == 0x98 and r["data"][0] == 7]   # no handover
+    out = capsys.readouterr().out
+    assert "serving the raid battle with scripted" in out and "the served battle is over" in out

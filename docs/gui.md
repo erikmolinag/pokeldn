@@ -22,6 +22,12 @@ conversion.
 
 ## First launch
 
+The checkerboard covers the whole window, the transparent header included; the navigation rail
+floats on it as a glass panel like the others. The header has no visible app title and supports dragging and double-clicking
+to maximize or restore. macOS retains its native window buttons; Windows and Linux use buttons
+in the app header. The integrated header has been visually checked on macOS; Windows and Linux
+window-manager behavior remains unverified.
+
 - macOS: the app is unsigned. Open it once and close the warning, then open System Settings →
   Privacy & Security → Security → Open Anyway next to pokeldn. Confirm with your password.
   Later launches open normally.
@@ -31,6 +37,63 @@ conversion.
 - Linux: install GTK 3 and libsecret if your distribution does not include them. Serial access
   needs `sudo usermod -aG dialout $USER` (`uucp` on Arch); log out and back in after changing groups.
   See [Linux serial ports](#linux-serial-ports) for missing ports and brltty conflicts.
+
+## Android setup requirements
+
+The [Android app](../examples/android/README.md) is this interface on a phone. Its Board page
+follows the table below; it reads the USB state again when a board is plugged or unplugged, when
+Android's USB prompt closes and when the player returns from Settings. A native-USB board
+(`303a:1001`) opens the app when plugged in. On the tested OnePlus CPH2621, enabling the phone's OTG
+connection setting powered and enumerated the connected ESP32C6 without replugging the cable.
+
+| detected state | required guidance |
+|---|---|
+| No compatible USB device | Check the data-capable cable and connection; show relevant USB host or OTG setting instructions for the phone, including OnePlus's OTG connection toggle. Device absence alone cannot identify which check failed. |
+| Device present, USB permission missing or denied | Explain the Android USB access prompt and provide an explicit retry. |
+| Permission granted, board handshake fails | Check the board connection and supported radio firmware; show the actual error. |
+| Board answers the handshake | Show the detected board and firmware, then allow the game workflow to continue. |
+| Board disconnects or the user returns from Settings | Refresh detection and permission state, update the guidance and resume setup when the board is ready. |
+
+A board seen only through a CP210x, CH34x or FTDI bridge (a classic ESP32) is named as one the
+phone app cannot drive. PKHeX runs on the phone, compiled for Android. The received Pokemon is saved
+through Android's file picker.
+
+Settings guidance uses verified manufacturer-specific paths or searchable setting names, with
+a Settings shortcut where Android supports it. The flow presents the relevant next action and
+keeps setup progress visible. Developer tooling such as ADB and wireless debugging remains
+separate from user setup.
+
+
+On Android "Open the folder" saves a zip of the folder where the player picks, and file choosers are
+Android's own.
+
+## iOS setup
+
+The [iOS app](../examples/ios/README.md) is this interface on an iPhone or iPad, installed with
+AltStore or SideStore. An iPhone cannot open a USB serial device, so the app reaches the board over
+Bluetooth: the board runs the **Bluetooth wireless** firmware, installed once from the desktop app's
+Board page (`pokeldn-radio-ble-c6.bin` for an ESP32-C6, `pokeldn-radio-ble.bin` for a classic ESP32),
+and needs USB only for power. The Board page lists it as "Bluetooth radio" once the phone has
+connected; the first launch asks for Bluetooth access. While the phone holds the board, the board
+answers nothing on its USB cable: close the iOS app before using the board from a computer or an
+Android phone. File choosers are iOS's own and copy the chosen file into the app; the app's files
+are under Files, On My iPhone, pokeldn.
+
+## Phones
+
+Below 760 points wide the app shows its pages through a bottom tab bar and each page's panels one
+at a time, picked on a switcher above them: Games, Options and Session on the Games page; choosing
+a tool brings its options forward and Start brings the session. Dialogs take the screen's width.
+The Control and Update pages are absent on Android and iOS.
+
+## App language
+
+Settings, App language lists English and installed community language packs. Choosing a pack enables
+it; restart the app to apply the choice. Missing strings fall back to English. Trainer language
+controls built Pokemon separately. [Language packs](plugins.md#language-packs-15) describes the
+package format and translator template. The desktop app ships English defaults only. The bundled [Noto Sans CJK SC](https://github.com/notofonts/noto-cjk/tree/main/Sans/OTF/SimplifiedChinese) fallback font
+covers Chinese, Japanese and Korean text offline; its SIL Open Font License is in
+`gui/assets/fonts/LICENSE`.
 
 ## Your trainer
 
@@ -195,13 +258,17 @@ helper request, and a run inherits it as `POKELDN_HOME_TRACKER`.
 
 | setting | bank move, import, and the builder's gift repair | legality | warning shown |
 |---|---|---|---|
-| `empty` (default) | the tracker stays unset | the missing tracker is accepted when it is PKHeX's only problem; every other problem is refused | PKHeX flags the missing HOME tracker |
+| `empty` (default) | the tracker stays unset | accepted when PKHeX finds the record legal with a tracker; any other problem is refused | PKHeX flags the missing HOME tracker |
 | `made` | a random 63-bit tracker, the bank's for a banked Pokemon | unchanged | Can't be deposited in HOME |
 
 Every helper reply carries `home_tracker` (`empty`, `made` or empty), and `destinations` gives it per
 game. The warning shows on a built or loaded offer, a bank entry, a bank destination and an import line.
-An unset tracker can change other verdicts: PKHeX 26.8.26 refuses the Hidden Ability of the Black 2 Patrat
-in `tests/data/bank_import.json` moved into Legends Z-A without a tracker, and accepts it with one.
+PKHeX 26.8.26 conditions other checks on a tracker being present: without one it lets no evolution happen
+in another HOME game (`EvolutionGroupHOME.CheckAllAdjacent`), so a Pikachu hatched as a Pichu in Scarlet
+reads as an impossible evolution in Sword/Shield, and Legends Z-A keeps the ability HOME realigned only on a
+tracked record (`AbilityVerifier.VerifyBirthAbility`, the Black 2 Patrat's Hidden Ability in
+`tests/data/bank_import.json`). Under `empty` the helper judges such a record on a copy that carries a tracker
+and what HOME changes on a Pokemon it has seen (`ValidWithTracker`); the record itself keeps none.
 
 Mystery Gift - Simulated follows the setting too ([Mystery Gift - Simulated](#mystery-gift---simulated)).
 Among the gifts, PKHeX wants a tracker only on one HOME gave: under `empty` its copy has none, under
@@ -342,45 +409,14 @@ them. An app that finds a service running other code
 
 ## Pokemon sprites
 
-The sprites are the 96x96 PNGs behind `sprites.front_default` and `sprites.front_shiny` of
-`https://pokeapi.co/api/v2/pokemon/{id}`, read from `raw.githubusercontent.com/PokeAPI/sprites`
-(`sprites/pokemon/{id}.png`, `sprites/pokemon/shiny/{id}.png`). The JSON (300 KB per species) is not
-fetched; the sprite path is fixed by the id. All 1,025 National Dex numbers have both sprites; 1026
-returns 404. When a shiny sprite is missing, the normal one is shown.
+Pokemon images come from [PokeAPI](https://github.com/PokeAPI/sprites) and are downloaded on demand.
+Downloaded images are cached in `sprites/` in the app's data folder and remain available offline.
 
-| where | size |
-|---|---|
-| the trade picker, beside Species, shiny when Shiny is on | 96 px, the whole canvas |
-| the card of a Species field (Sword/Shield Mystery Gift), shiny when the tool's Shiny switch is on | 46 px tile |
-| Session panel, Offering: each queued offer in trade order, its summary as a tooltip | 46 px tile |
-| Session panel, Received: each Pokemon file the run saved, read by PKHeX, with its summary | 46 px tile |
+Settings, Pokemon sprites disables downloads; cached images still appear. The same settings section
+has a button to clear the sprite cache.
 
-A 96 px sprite is the whole canvas at 1:1, nearest-neighbour. A 46 px tile crops the canvas around the
-visible pixels (`pokeldn.app.sprites.bounds`) and scales them, smoothed, until the longer side is
-40 px, so every tile shows its Pokemon at one size. Visible boxes run from 28 px (Togepi) to the full
-96 px width (Lugia); a fixed 1:1 or 1:2 choice drew a 50 px sprite at 50 px and a 56 px one at 28.
-
-The Received list matches files by the run's `{stamp}`, which every tool's output path carries; a
-launcher adds `-N` for trade N (`pokeldn.pokemon.trade_path`) or writes into a folder or prefix so
-named. A file still growing is read again on the next second. What the list holds is what the
-launcher wrote: some launchers write the console's offer when the console picks it, before the trade
-completes.
-
-The cache is `sprites/` in the app's data folder, one file per sprite under `normal/` and `shiny/`.
-A sprite downloads on first use and is read from disk afterwards, with no network access. Rules:
-
-| situation | behaviour |
-|---|---|
-| no network, nothing cached | the pixelarticons `circle-question` icon; no error; the next attempt waits 60 s |
-| HTTP 404 | a `{id}.none` marker; not asked again for 7 days |
-| reply that is not a PNG, or over 200 KB | not cached |
-| PNG with a colour profile, text or other extra chunks | saved and shown without them: only IHDR, PLTE, tRNS, IDAT and IEND are kept (26 of the 2,050 sprites, most of them Gen 9) |
-| damaged cached file | deleted, downloaded again |
-| data folder not writable | the sprite shows for the session and is not saved |
-| Settings, Pokemon sprites off | the cache is read, nothing is downloaded |
-
-Settings has the switch and a button that empties the cache. `POKELDN_SPRITE_BASE` replaces the sprite
-host, for tests (`tests/test_sprites.py`).
+An unavailable species or form shows a placeholder. If a shiny image is unavailable, the normal
+image of the same form is shown. Missing images do not prevent building or trading Pokemon.
 
 ## Raid events
 
@@ -422,6 +458,17 @@ event is in use. An event the copy lacks (not downloaded, or an update dropped i
 header reads "Missing: Event" in red, and the run refuses it until the copy has it or another event
 is chosen (`pokeldn.app.command.code_error`).
 
+## Hosted raid rewards
+
+The Tera Raid (Host) tool's Rewards card offers training items, Tera Shards (Stellar included),
+Herba Mystica, treasure and balls as templates. Choosing a bundle replaces the current reward rows.
+Quantity each changes every row in that bundle, from 1 to 999. Editing an item or an individual
+quantity switches to Custom rewards; rows can be added or removed, up to 45. Incomplete rows or
+invalid quantities prevent a launch. The saved selection keeps the items and quantities.
+
+Raid's own rewards clears the overrides and uses the selected raid's reward tables
+([Hosting](sv_raid.md#hosting); `gui/views/rewards.py`).
+
 ## Raid NPC partners
 
 The Tera Raid (Host) tool's Raid NPC partners card, below Consoles joining, chooses the NPC trainers
@@ -443,6 +490,33 @@ Each pick passes `--raid-partner`, in order. Raising Consoles joining drops the 
 pick the chosen stage lacks (Dylan or Luke below four stars) is dropped. Folding only hides the card
 (`GamesView.show_raid_partners`): the choice still goes to the raid, and the header names it.
 
+## Union Circle
+
+Scarlet/Violet's two Union Circle tools join the circle a console hosts under a four-digit Link Code
+([Union Circle](sv_union_circle.md)). A circle's code is new each time, so the field starts empty at
+every launch (`Field.remembered`).
+
+- Union Circle - Quests: Task unlocks every remaining Snacksworth legendary or gives BP;
+  the BP field takes 1 to 9,999,999 (`Field.bounds`). The console steps follow the task chosen: a
+  step given as `(text, (flag, value))` shows only while that field has that value
+  (`command.steps`). A Snacksworth run draws a bar of the host's clears against those it lacked
+  ([Progress](#progress)).
+- Union Circle - Encounters: the Pokemon to spawn card (`gui/views/encounter.py`, field kind
+  `encounter`) sets the species, shiny, form, level, Tera Type, nature, gender, ability, held item,
+  scale and IVs. Nature, ability, scale and IVs left empty are drawn as the host's own wild ones
+  are. A new species resets the fields below it. With Legal encounters only, on by default, the card
+  offers the species, forms and levels PKHeX's wild slots give and the Tera Types PKHeX accepts
+  somewhere, and lists every location where PKHeX accepts the spawn caught, or why it accepts it
+  nowhere. The card passes `--spawn` and the `--spawn-*` flags (`command.encounter_args`).
+
+A built-in run's `[panel]` cards ([Status cards](plugins.md#status-cards-18)) show at the top of its
+tool's options while it runs, and only there (`GamesView.show_run_cards`); they go when the run
+ends. The encounters run shows its area search this way.
+
+A circle run's log keeps to what a user follows: the join, the host's totals, the BP clear, the
+spawns coming out or being battled, and the host's area found or lost. `--verbose-circle` (in the
+Advanced tab's Advanced options) adds every circle message sent and each step of the area search.
+
 ## Mystery Gift - Simulated
 
 The Mystery Gift - Simulated tool's card, on Let's Go, Brilliant Diamond/Shining Pearl, Legends
@@ -453,17 +527,21 @@ given; a hover shows the moves. Twenty-four show at a time, Show more adds as ma
 narrows them by any word a tile shows, the ball, a move or the card number. Ten tiles or fewer show
 whole; more scroll in a box of their own (`event_gifts.FIT`).
 
-A click makes a fresh copy for the trainer in Settings and keeps it with the built Pokemon. It becomes
-the trade's offer, shown under the list with its legality, moves and OT. A copy keeps the trainer it
-was made with: pick the gift again after changing the trainer. A gift that names its receiver but
+A click makes a fresh copy for the trainer in Settings and appends it to the queue above the list,
+with its legality, moves and OT. Up to six gifts trade in order in one hosted session. The same
+event can be picked several times; each pick makes its own copy. Remove a queued gift with its
+close button before Start. A full queue holds further picks off until a gift is removed.
+A copy keeps the trainer it was made with: remove it and pick the gift again after changing the trainer.
+A gift that names its receiver but
 never reached saves in the trainer's language, such as Let's Go's Chinese Meltan and Melmetal for any
 other, has an illegal tile that says why, and a click on it says so and keeps the offer
 ([Saves a card reached](gift_simulated.md#saves-a-card-reached)). With Made for the receiving player
 (Advanced tab) on, the default, the trade makes a gift that names its receiver again for the console's own save
 ([Made for the receiving player](gift_simulated.md#made-for-the-receiving-player)). A gift with its
-card's own trainer goes as made: picking it turns the switch off, disabled and faded, and the note
-under it names that trainer (`command.locked`). The launch then passes no `--for-receiver`. Picking a
-gift that names its receiver gives the switch back as it was set.
+card's own trainer goes as made. While every queued gift goes as made, the switch is off, disabled
+and faded, and the note under it says why (`command.locked`). The launch then passes no
+`--for-receiver`. A queue containing a gift that can name its receiver gives the switch back as it
+was set; the host applies it to each eligible card.
 
 A gift HOME gave, on any game but Let's Go, has the tracker the HOME tracker setting gives it
 ([The HOME tracker setting](#the-home-tracker-setting)). Its tile is outlined in amber and, as the
@@ -471,15 +549,34 @@ chosen copy, shows the setting's warning: "PKHeX flags the missing HOME tracker"
 deposited in HOME". The trade offers it like any other
 ([The copy a trade offers](gift_simulated.md#the-copy-a-trade-offers)).
 
+## Private logs
+
+Settings, Hide personal details in logs (on by default) masks, in the session and board logs the app
+shows and copies (`pokeldn/app/redact.py`):
+
+| masked | shown instead | kept |
+|---|---|---|
+| the home folder in a path (`/Users/NAME`, `/home/NAME`, `C:\Users\NAME`) | `~` | the rest of the path |
+| the iOS app container (`/var/mobile/Containers/Data/Application/UUID`) | `<app>` | |
+| the device half of a MAC address, with or without colons | `**:**:**`, `******` | the vendor half (Nintendo, Espressif) |
+| a quoted value (`'…'`, `"…"`, `b'…'`) after `ot_name`, `ht_name`, `OT`, `nickname`, `trainer`, `player` or `name` | `***` | `POKELDN` and `PKLDN` in any case, the program's own names |
+| a value after `TID`, `SID`, `tid`, `sid`, `trainer_id` | `***` | |
+| a trainer name seen once, and the trainer name from Settings, wherever it appears again in the run, as a whole word | `***` | |
+
+A nickname is masked where it stands and nowhere else: it is often the species' own name. Session
+records (`captures/`) carry the raw messages and are not masked. Local link addresses (`169.254.x.x`,
+`127.0.0.x`) identify nobody and stay.
+
 ## Pop-ups
 
 A run the app started, another of its child processes, or the app's own code can put a pop-up over
-whatever page shows (`pokeldn.popup`, in the plugin API since 1.2). There are two kinds:
+whatever page shows (`pokeldn.popup`, in the plugin API since 1.2). There are three kinds:
 
 | kind | buttons | callback |
 |---|---|---|
 | `acknowledge(title, text)` | one, `label` (OK) | `on_ack`: the button, Esc or a click outside |
 | `confirm(title, text, agree, disagree)` | agree and disagree, the caller's labels | `on_agree`, `on_disagree` or `on_dismiss`, which Esc and a click outside fire |
+| `choose(title, text, options)` (1.7) | one per option, 2 to 8, full width under the text in the caller's order | `on_choice(index)`, or `on_dismiss`, which Esc and a click outside fire |
 
 Opening one never waits: it returns the pop-up's id, and the answer comes later as its callback. A
 callback runs on the thread that reads the app's answers, unless `set_dispatcher(dispatch)` hands it to the program's own loop; in the app, it runs on a worker
@@ -495,18 +592,26 @@ earlier answer already handed to the dispatcher. A program holding 32
 pop-ups unanswered gets `RuntimeError`. A pop-up's header names the program that opened it: the
 tool, Board installer or Controller service, and nothing for the app's own.
 
-When a program exits, its confirmations close and its acknowledgements stay with no answer to go
-back. With no app (`available()` is false, as in a terminal), a pop-up is a `[pop-up]` line in the
+When a program exits, its confirmations and choices close and its acknowledgements stay with no answer
+to go back. With no app (`available()` is false, as in a terminal), a pop-up is a `[pop-up]` line in the
 output, no answer comes, and it does not count toward the 32.
 
 `runner.Process(..., popups=app.popups, label=...)` sets `POKELDN_POPUPS=1` in the child. The child
 sends each pop-up as a `[popup]` line and a JSON object on stdout, which the app keeps out of the log
 and finds wherever in a line another thread's print left it; the app answers with
-`[popup] {"id", "n", "answer"}` on the child's stdin, which `pokeldn.app.runner.child` reads. `n`
+`[popup] {"id", "n", "answer"}` on the child's stdin (a choice's answer is the option's index, `"0"`
+to `"7"`), which `pokeldn.app.runner.child` reads. `n`
 tells a pop-up from one opened again under its id, so a late answer to a replaced pop-up fires
 nothing. Code in the app reaches the manager directly (`popup.attach`). `pokeldn.app.popups.Manager`
 keeps the open pop-ups; `gui.popups.Dialogs` draws them. An app dialog's
 `page.pop_dialog()` closes the app's own top dialog, never a pop-up opened above it.
+
+## Progress
+
+A run prints `[progress] DONE TOTAL UNIT TITLE` (`pokeldn.progress.show`, plugin API 1.7; `UNIT` is
+`bytes` or `items`) to put a bar in the Session panel in place of a log line: the amount
+(`1.05 of 5.20 GB`), the rate over the last 30 s and the time left. `show` prints at most four lines a
+second per title and always the last one. A save backup's or restore's `[save]` lines draw the same bar.
 
 Mystery Gift - Simulated raises a warning when a gift made for the receiving player goes with the
 trainer from Settings instead, saying why: the save names no one, or its copy stopped at the card,
@@ -594,6 +699,20 @@ always carries the built one. The script needs Flutter, at the version
 deployment target from 11.0 to 12.0: Xcode 27 builds nothing older. The Linux client is Flet's light
 flavor, as Flet's own CI builds it.
 
+## The docs page
+
+The Docs page shows the app guide and every page of this site that its navigation lists. The search
+field above the page list matches sections: each heading and the text under it, every word of the
+query required. A word in a heading or a page title ranks first. Picking a result opens the page at
+that heading; a link to `page.md#heading` scrolls the same way (`gui/views/docs.py`).
+
+## Unreleased titles
+
+A title prepared ahead of its Switch release appears in the Games list, the Bank and the Docs page
+only when the app runs from a source checkout (`pokeldn/app/preview.py`). A packaged release is
+frozen and carries no `.git`, so it never shows one. `POKELDN_PREVIEW=1` shows them anywhere;
+`POKELDN_PREVIEW=0` hides them in a checkout. Its docs page sets `nav_exclude` and `search_exclude`.
+
 ## Run from source
 
 For source development, install Python 3.13 and the .NET 10 SDK:
@@ -636,6 +755,15 @@ idf.py -B build/esp32c3 merge-bin -o "$POKELDN_IMAGES/pokeldn-radio-c3.bin"
 idf.py -B build/esp32c6 -D SDKCONFIG="$PWD/build/esp32c6/sdkconfig" set-target esp32c6
 idf.py -B build/esp32c6 -D SDKCONFIG="$PWD/build/esp32c6/sdkconfig" build
 idf.py -B build/esp32c6 merge-bin -o "$POKELDN_IMAGES/pokeldn-radio-c6.bin"
+export POKELDN_BLE=1   # the Bluetooth builds for the iOS app (hardware_esp32.md, Bluetooth)
+BLE_DEFAULTS="sdkconfig.defaults;sdkconfig.defaults.ble"
+idf.py -B build/ble -D SDKCONFIG="$PWD/build/ble/sdkconfig" -D SDKCONFIG_DEFAULTS="$BLE_DEFAULTS" set-target esp32
+idf.py -B build/ble -D SDKCONFIG="$PWD/build/ble/sdkconfig" -D SDKCONFIG_DEFAULTS="$BLE_DEFAULTS" build
+idf.py -B build/ble merge-bin -o "$POKELDN_IMAGES/pokeldn-radio-ble.bin"
+idf.py -B build/ble-c6 -D SDKCONFIG="$PWD/build/ble-c6/sdkconfig" -D SDKCONFIG_DEFAULTS="$BLE_DEFAULTS" set-target esp32c6
+idf.py -B build/ble-c6 -D SDKCONFIG="$PWD/build/ble-c6/sdkconfig" -D SDKCONFIG_DEFAULTS="$BLE_DEFAULTS" build
+idf.py -B build/ble-c6 merge-bin -o "$POKELDN_IMAGES/pokeldn-radio-ble-c6.bin"
+unset POKELDN_BLE
 cd ../pad
 idf.py -B build -D SDKCONFIG="$PWD/build/sdkconfig" set-target esp32s3
 idf.py -B build -D SDKCONFIG="$PWD/build/sdkconfig" build
@@ -646,10 +774,10 @@ python scripts/build_unicorn.py
 python scripts/pack_app.py
 ```
 
-The absolute output paths keep the images in `gui/firmware`. The packer requires all five images,
+The absolute output paths keep the images in `gui/firmware`. The packer requires the radio, Bluetooth radio and controller images,
 the client from `scripts/build_client.py` and the Unicorn from `scripts/build_unicorn.py` (needs CMake); the frozen app check verifies all are included and
 that the bundled client carries `flet_drop`. The release workflow builds each target separately
-and supplies all five images to every desktop packer.
+and supplies every image to every desktop packer.
 
 The app version is `pokeldn.__version__`. It appears in Settings and in the macOS and Windows
 package metadata. Update it and `.github/release-notes.md` together before preparing a release.
